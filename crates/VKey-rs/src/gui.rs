@@ -204,43 +204,46 @@ impl AppGui {
             loop {
                 std::thread::sleep(std::time::Duration::from_millis(50));
 
-                if let Ok(
-                    tray_icon::TrayIconEvent::Click {
-                        button: tray_icon::MouseButton::Left,
-                        ..
+                while let Ok(event) = tray_event_receiver.try_recv() {
+                    match event {
+                        tray_icon::TrayIconEvent::Click {
+                            button: tray_icon::MouseButton::Left,
+                            button_state: tray_icon::MouseButtonState::Up,
+                            ..
+                        }
+                        | tray_icon::TrayIconEvent::DoubleClick {
+                            button: tray_icon::MouseButton::Left,
+                            ..
+                        } => {
+                            let mut cfg = shared_config_clone.lock().unwrap().clone();
+                            cfg.enabled = !cfg.enabled;
+
+                            // Save to file
+                            crate::config_store::save_config(&cfg);
+                            // Notify background thread
+                            let _ = tx_clone.send(AppMessage::UpdateConfig(cfg.clone()));
+                            // Notify GUI thread
+                            let _ = gui_tx_clone.send(GuiMessage::StateChanged(cfg.clone()));
+                            // Update shared lock
+                            *shared_config_clone.lock().unwrap() = cfg.clone();
+                            // Update tray icon immediately
+                            if let Some(tray) = shared_tray_clone.as_ref() {
+                                let icon = generate_tray_icon(cfg.enabled);
+                                let _ = tray.set_icon(Some(icon));
+                            }
+
+                            // Synchronize tray menu checkmark immediately
+                            menu_enabled_send.set_text(if cfg.enabled {
+                                "✓ Bật tiếng Việt"
+                            } else {
+                                "  Bật tiếng Việt"
+                            });
+
+                            // Wake up winit to update GUI window immediately
+                            ctx_clone.request_repaint_of(egui::ViewportId::ROOT);
+                        }
+                        _ => {}
                     }
-                    | tray_icon::TrayIconEvent::DoubleClick {
-                        button: tray_icon::MouseButton::Left,
-                        ..
-                    },
-                ) = tray_event_receiver.try_recv()
-                {
-                    let mut cfg = shared_config_clone.lock().unwrap().clone();
-                    cfg.enabled = !cfg.enabled;
-
-                    // Save to file
-                    crate::config_store::save_config(&cfg);
-                    // Notify background thread
-                    let _ = tx_clone.send(AppMessage::UpdateConfig(cfg.clone()));
-                    // Notify GUI thread
-                    let _ = gui_tx_clone.send(GuiMessage::StateChanged(cfg.clone()));
-                    // Update shared lock
-                    *shared_config_clone.lock().unwrap() = cfg.clone();
-                    // Update tray icon immediately
-                    if let Some(tray) = shared_tray_clone.as_ref() {
-                        let icon = generate_tray_icon(cfg.enabled);
-                        let _ = tray.set_icon(Some(icon));
-                    }
-
-                    // Synchronize tray menu checkmark immediately
-                    menu_enabled_send.set_text(if cfg.enabled {
-                        "✓ Bật tiếng Việt"
-                    } else {
-                        "  Bật tiếng Việt"
-                    });
-
-                    // Wake up winit to update GUI window immediately
-                    ctx_clone.request_repaint_of(egui::ViewportId::ROOT);
                 }
 
                 if let Ok(event) = menu_event_receiver.try_recv() {
