@@ -49,7 +49,13 @@ fn try_stroke_d(output: &mut [char], character: char) -> bool {
         *previous = unicode::strip_shape(*previous);
         false
     } else if unicode::is_plain(*previous, 'd') {
-        *previous = unicode::apply_shape(*previous, Shape::Stroke).expect("d supports stroke");
+        let is_upper = previous.is_uppercase() || character.is_uppercase();
+        let char_to_shape = if is_upper {
+            previous.to_ascii_uppercase()
+        } else {
+            previous.to_ascii_lowercase()
+        };
+        *previous = unicode::apply_shape(char_to_shape, Shape::Stroke).expect("d supports stroke");
         true
     } else {
         false
@@ -71,7 +77,13 @@ fn try_circumflex(output: &mut [char], character: char) -> bool {
             output[index] = unicode::strip_shape(c);
             false
         } else if unicode::is_plain(c, base) {
-            if let Some(shaped) = unicode::apply_shape(c, Shape::Circumflex) {
+            let is_upper = c.is_uppercase() || character.is_uppercase();
+            let char_to_shape = if is_upper {
+                c.to_ascii_uppercase()
+            } else {
+                c.to_ascii_lowercase()
+            };
+            if let Some(shaped) = unicode::apply_shape(char_to_shape, Shape::Circumflex) {
                 output[index] = shaped;
                 true
             } else {
@@ -147,7 +159,13 @@ fn try_w_shape(output: &mut [char], character: char) -> bool {
                 output[index] = unicode::strip_shape(c);
                 false
             } else if unicode::is_plain(c, base) {
-                if let Some(shaped) = unicode::apply_shape(c, shape) {
+                let is_upper = c.is_uppercase() || character.is_uppercase();
+                let char_to_shape = if is_upper {
+                    c.to_ascii_uppercase()
+                } else {
+                    c.to_ascii_lowercase()
+                };
+                if let Some(shaped) = unicode::apply_shape(char_to_shape, shape) {
                     output[index] = shaped;
                     true
                 } else {

@@ -8,11 +8,60 @@ use vietnamese_core::{Charset, EngineConfig, InputMethod};
 
 use crate::{AppMessage, GuiMessage};
 
+// Thread-safe wrapper for MenuItem to allow updating tray menu items from background threads on Windows
+struct SendMenuItem(MenuItem);
+unsafe impl Send for SendMenuItem {}
+unsafe impl Sync for SendMenuItem {}
+
+#[cfg(target_os = "windows")]
+fn force_show_window() {
+    unsafe {
+        let title: Vec<u16> = "VKey Settings\0".encode_utf16().collect();
+        let hwnd = windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW(
+            std::ptr::null(),
+            title.as_ptr(),
+        );
+        if hwnd != 0 {
+            windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
+                hwnd,
+                windows_sys::Win32::UI::WindowsAndMessaging::SW_RESTORE,
+            );
+            windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
+                hwnd,
+                windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOW,
+            );
+            windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn force_show_window() {}
+
+impl std::ops::Deref for SendMenuItem {
+    type Target = MenuItem;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+// Thread-safe wrapper for TrayIcon to allow setting tray icons from background threads on Windows
+pub struct SendTrayIcon(TrayIcon);
+unsafe impl Send for SendTrayIcon {}
+unsafe impl Sync for SendTrayIcon {}
+
+impl std::ops::Deref for SendTrayIcon {
+    type Target = TrayIcon;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 pub struct AppGui {
     config: EngineConfig,
     tx: Sender<AppMessage>,
     gui_rx: Receiver<GuiMessage>,
-    tray_icon: Option<TrayIcon>,
+    tray_icon: Option<std::sync::Arc<SendTrayIcon>>,
     menu_enabled: MenuItem,
     menu_telex: MenuItem,
     menu_vni: MenuItem,
@@ -28,6 +77,7 @@ impl AppGui {
         config: EngineConfig,
         tx: Sender<AppMessage>,
         gui_rx: Receiver<GuiMessage>,
+        gui_tx: Sender<GuiMessage>,
         ctx: egui::Context,
     ) -> Self {
         // 1. Create Tray Menu Items
@@ -109,7 +159,12 @@ impl AppGui {
         tray_menu.append(&method_submenu).unwrap();
         tray_menu.append(&charset_submenu).unwrap();
         tray_menu
-            .append(&MenuItem::with_id("settings", "Cài đặt...", true, None))
+            .append(&MenuItem::with_id(
+                "settings",
+                "Hiển thị cài đặt",
+                true,
+                None,
+            ))
             .unwrap();
         tray_menu
             .append(&MenuItem::with_id("exit", "Thoát", true, None))
@@ -124,12 +179,24 @@ impl AppGui {
             .build()
             .ok();
 
+        let tray_icon = tray_icon.map(|t| std::sync::Arc::new(SendTrayIcon(t)));
+
         // 3. Shared thread-safe state for background tray thread
         let shared_config = std::sync::Arc::new(std::sync::Mutex::new(config.clone()));
         let shared_config_clone = shared_config.clone();
 
         let tx_clone = tx.clone();
+        let gui_tx_clone = gui_tx.clone();
         let ctx_clone = ctx.clone();
+
+        let menu_enabled_send = SendMenuItem(menu_enabled.clone());
+        let menu_telex_send = SendMenuItem(menu_telex.clone());
+        let menu_vni_send = SendMenuItem(menu_vni.clone());
+        let menu_unicode_send = SendMenuItem(menu_unicode.clone());
+        let menu_tcvn3_send = SendMenuItem(menu_tcvn3.clone());
+        let menu_vni_charset_send = SendMenuItem(menu_vni_charset.clone());
+        let shared_tray_clone = tray_icon.clone();
+
         std::thread::spawn(move || {
             let tray_event_receiver = tray_icon::TrayIconEvent::receiver();
             let menu_event_receiver = tray_icon::menu::MenuEvent::receiver();
@@ -141,9 +208,11 @@ impl AppGui {
                     | tray_icon::TrayIconEvent::DoubleClick { .. },
                 ) = tray_event_receiver.try_recv()
                 {
+                    let _ = gui_tx_clone.send(GuiMessage::ShowSettingsWindow);
+                    force_show_window();
                     ctx_clone.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                     ctx_clone.send_viewport_cmd(egui::ViewportCommand::Focus);
-                    ctx_clone.request_repaint();
+                    ctx_clone.request_repaint_of(egui::ViewportId::ROOT);
                 }
 
                 if let Ok(event) = menu_event_receiver.try_recv() {
@@ -177,9 +246,11 @@ impl AppGui {
                             changed = true;
                         }
                         "settings" => {
+                            let _ = gui_tx_clone.send(GuiMessage::ShowSettingsWindow);
+                            force_show_window();
                             ctx_clone.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                             ctx_clone.send_viewport_cmd(egui::ViewportCommand::Focus);
-                            ctx_clone.request_repaint();
+                            ctx_clone.request_repaint_of(egui::ViewportId::ROOT);
                         }
                         "exit" => {
                             exit_app = true;
@@ -200,6 +271,46 @@ impl AppGui {
                         let _ = tx_clone.send(AppMessage::UpdateConfig(cfg.clone()));
                         // 3. Update shared lock
                         *shared_config_clone.lock().unwrap() = cfg.clone();
+                        // 4. Notify GUI thread directly
+                        let _ = gui_tx_clone.send(GuiMessage::StateChanged(cfg.clone()));
+
+                        // 5. Update tray menu checkmarks immediately
+                        menu_enabled_send.set_text(if cfg.enabled {
+                            "✓ Bật tiếng Việt"
+                        } else {
+                            "  Bật tiếng Việt"
+                        });
+                        menu_telex_send.set_text(if cfg.input_method == InputMethod::Telex {
+                            "✓ Telex"
+                        } else {
+                            "  Telex"
+                        });
+                        menu_vni_send.set_text(if cfg.input_method == InputMethod::Vni {
+                            "✓ VNI"
+                        } else {
+                            "  VNI"
+                        });
+                        menu_unicode_send.set_text(if cfg.charset == Charset::Unicode {
+                            "✓ Unicode"
+                        } else {
+                            "  Unicode"
+                        });
+                        menu_tcvn3_send.set_text(if cfg.charset == Charset::Tcvn3 {
+                            "✓ TCVN3 (ABC)"
+                        } else {
+                            "  TCVN3 (ABC)"
+                        });
+                        menu_vni_charset_send.set_text(if cfg.charset == Charset::Vni {
+                            "✓ VNI Windows"
+                        } else {
+                            "  VNI Windows"
+                        });
+
+                        // 6. Update tray icon immediately
+                        if let Some(tray) = shared_tray_clone.as_ref() {
+                            let icon = generate_tray_icon(cfg.enabled);
+                            let _ = tray.set_icon(Some(icon));
+                        }
 
                         ctx_clone.request_repaint_of(egui::ViewportId::ROOT);
                     }
@@ -320,6 +431,11 @@ impl eframe::App for AppGui {
         }
 
         // Render UI only if window is visible
+        let focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
+        if focused && !self.window_visible {
+            self.window_visible = true;
+        }
+
         if !self.window_visible {
             return;
         }

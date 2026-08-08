@@ -24,6 +24,7 @@ dependencies = [
  "tray-icon",
  "unicode-segmentation",
  "vietnamese-core",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

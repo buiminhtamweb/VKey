@@ -32,12 +32,38 @@ struct Options {
     headless: bool,
 }
 
+#[cfg(target_os = "windows")]
+fn show_existing_window() {
+    unsafe {
+        let title: Vec<u16> = "VKey Settings\0".encode_utf16().collect();
+        let hwnd = windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW(
+            std::ptr::null(),
+            title.as_ptr(),
+        );
+        if hwnd != 0 {
+            windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
+                hwnd,
+                windows_sys::Win32::UI::WindowsAndMessaging::SW_RESTORE,
+            );
+            windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
+                hwnd,
+                windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOW,
+            );
+            windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn show_existing_window() {}
+
 fn main() -> ExitCode {
     // Ensure only one instance of VKey is running
     let _instance_lock = match std::net::TcpListener::bind("127.0.0.1:58989") {
         Ok(listener) => listener,
         Err(_) => {
             eprintln!("VKey is already running.");
+            show_existing_window();
             return ExitCode::SUCCESS;
         }
     };
@@ -119,13 +145,14 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                 // Spawn background keyboard daemon thread inside the main loop closure
                 let daemon_config = config.clone();
                 let ctx_clone = ctx.clone();
+                let gui_tx_clone = gui_tx.clone();
                 std::thread::spawn(move || {
-                    if let Err(error) = run_daemon(daemon_config, rx, gui_tx, ctx_clone) {
+                    if let Err(error) = run_daemon(daemon_config, rx, gui_tx_clone, ctx_clone) {
                         error!("Daemon background thread error: {}", error);
                     }
                 });
 
-                Ok(Box::new(gui::AppGui::new(config, tx, gui_rx, ctx)))
+                Ok(Box::new(gui::AppGui::new(config, tx, gui_rx, gui_tx, ctx)))
             }),
         )
         .map_err(|e| e.to_string().into())
