@@ -1,6 +1,6 @@
 use unicode_segmentation::UnicodeSegmentation;
 use vietnamese_core::{
-    EngineAction, EngineConfig, InputEngine, InputMethod, Key, KeyEvent, Modifiers,
+    EngineAction, EngineConfig, InputEngine, InputMethod, Key, KeyEvent, KeyState, Modifiers,
 };
 
 fn apply_action(output: &mut String, action: EngineAction, passthrough: Option<char>) {
@@ -12,8 +12,11 @@ fn apply_action(output: &mut String, action: EngineAction, passthrough: Option<c
             }
         }
         EngineAction::Commit(text) => output.push_str(&text),
-        EngineAction::Replace { backspaces, text } => {
-            for _ in 0..backspaces {
+        EngineAction::Replace {
+            delete_graphemes,
+            text,
+        } => {
+            for _ in 0..delete_graphemes {
                 let new_len = output
                     .grapheme_indices(true)
                     .next_back()
@@ -154,7 +157,7 @@ fn shortcuts_and_disabled_engine_pass_through() {
             ctrl: true,
             ..Modifiers::default()
         },
-        pressed: true,
+        state: KeyState::Press,
     };
     assert_eq!(engine.process_key(shortcut), EngineAction::PassThrough);
 
@@ -163,6 +166,19 @@ fn shortcuts_and_disabled_engine_pass_through() {
         ..EngineConfig::default()
     };
     assert_eq!(type_text_with_config("tieengs", disabled), "tieengs");
+}
+
+#[test]
+fn runtime_enable_toggle_resets_composition() {
+    let mut engine = InputEngine::new(EngineConfig::default());
+    engine.process_key(KeyEvent::character('a'));
+    engine.set_enabled(false);
+
+    assert_eq!(engine.current_text(), "");
+    assert_eq!(
+        engine.process_key(KeyEvent::character('w')),
+        EngineAction::PassThrough
+    );
 }
 
 #[test]

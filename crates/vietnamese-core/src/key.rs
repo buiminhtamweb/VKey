@@ -3,15 +3,33 @@ pub enum Key {
     Character(char),
     Backspace,
     Enter,
-    Tab,
     Escape,
+    Tab,
+    Space,
+    Delete,
     Left,
     Right,
     Up,
     Down,
     Home,
     End,
-    Delete,
+    PageUp,
+    PageDown,
+    Insert,
+    Shift,
+    Control,
+    Alt,
+    Super,
+    CapsLock,
+    NumLock,
+    F(u8),
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyState {
+    Press,
+    Release,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -20,13 +38,15 @@ pub struct Modifiers {
     pub alt: bool,
     pub shift: bool,
     pub super_key: bool,
+    pub caps_lock: bool,
+    pub num_lock: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyEvent {
     pub key: Key,
     pub modifiers: Modifiers,
-    pub pressed: bool,
+    pub state: KeyState,
 }
 
 impl KeyEvent {
@@ -38,8 +58,10 @@ impl KeyEvent {
                 ctrl: false,
                 alt: false,
                 super_key: false,
+                caps_lock: false,
+                num_lock: false,
             },
-            pressed: true,
+            state: KeyState::Press,
         }
     }
 
@@ -51,8 +73,29 @@ impl KeyEvent {
                 alt: false,
                 shift: false,
                 super_key: false,
+                caps_lock: false,
+                num_lock: false,
             },
-            pressed: true,
+            state: KeyState::Press,
         }
+    }
+
+    pub const fn release(key: Key) -> Self {
+        Self {
+            key,
+            modifiers: Modifiers {
+                ctrl: false,
+                alt: false,
+                shift: false,
+                super_key: false,
+                caps_lock: false,
+                num_lock: false,
+            },
+            state: KeyState::Release,
+        }
+    }
+
+    pub const fn is_pressed(self) -> bool {
+        matches!(self.state, KeyState::Press)
     }
 }

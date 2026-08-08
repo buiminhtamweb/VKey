@@ -36,8 +36,11 @@ fn type_text(input: &str, input_method: InputMethod) -> String {
             EngineAction::Consume => {}
             EngineAction::PassThrough => output.push(character),
             EngineAction::Commit(text) => output.push_str(&text),
-            EngineAction::Replace { backspaces, text } => {
-                for _ in 0..backspaces {
+            EngineAction::Replace {
+                delete_graphemes,
+                text,
+            } => {
+                for _ in 0..delete_graphemes {
                     let len = output.grapheme_indices(true).next_back().map_or(0, |x| x.0);
                     output.truncate(len);
                 }

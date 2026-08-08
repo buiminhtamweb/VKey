@@ -1,163 +1,269 @@
 # Vkey-rs
 
-Vkey-rs is being built as a small, native Vietnamese input method in Rust. It
-does not use Fcitx5, IBus, Electron, or a clipboard-based primary input path.
+Vkey-rs is a native Vietnamese input method written in Rust. It does not use
+Fcitx5, IBus, Electron, an external keyboard command, or the clipboard as its
+primary input path.
 
-This repository currently completes **Phase 1 only**: the platform-independent
-Vietnamese engine and the `openkey-core-test` CLI. It does not intercept or
-inject keyboard input yet.
+The repository currently completes:
+
+- **Phase 1:** platform-independent Vietnamese core and test CLI.
+- **Phase 2:** native X11 keyboard observation and debug integration.
+
+Text injection, daemon IPC, egui settings, packaging, and Wayland support are
+not implemented yet.
 
 ## Architecture
 
-Phase 1 keeps all platform concerns outside `vietnamese-core`:
-
 ```text
-KeyEvent -> composition buffer -> Telex/VNI parser
-                              -> tone placement -> Unicode NFC
-                              -> EngineAction diff
+                    X11 Server
+                        |
+                        | XI_RawKeyPress / XI_RawKeyRelease
+                        v
+              +-----------------------+
+              | X11KeyboardBackend    |
+              +-----------+-----------+
+                          |
+                          v
+                     KeyEvent
+                          |
+                          v
+              +-----------------------+
+              | Vietnamese Core       |
+              +-----------+-----------+
+                          |
+                          v
+                    EngineAction
+                          |
+                          v
+                 Phase 3 Injector
+                    (not present)
 ```
 
-The public engine returns `PassThrough`, `Consume`, `Commit`, or a grapheme-safe
-`Replace { backspaces, text }`. Linux backends can therefore be added without
-putting X11, Wayland, device, or GUI types into the core.
+`vietnamese-core` remains independent of X11, Linux, devices, and GUI types.
+`keyboard-linux` converts X11 events into the shared `KeyEvent`; it contains no
+Vietnamese spelling rules.
 
-Current crates:
+## X11 architecture decision
 
-- `vietnamese-core`: engine, Telex/VNI, smart tone, NFC, restore, backspace.
-- `openkey-core-test`: minimal stdin/argument CLI for exercising the engine.
+Phase 2 selects `XI_RawKeyPress` and `XI_RawKeyRelease` from XInput2 on the
+screen's root window. It does not use `XGrabKeyboard`:
 
-Dependencies in Phase 1 are deliberately small: `serde` for stable config
-types, `unicode-normalization` for NFC, `unicode-segmentation` for safe
-backspace/diffs, and the dev-only `criterion` benchmark harness.
+- Raw events are global and independent of the focused client.
+- Selection is observational and never freezes, consumes, or reroutes input.
+- The blocking `wait_for_event()` path has no busy loop and needs no event
+  thread.
+- Closing the X11 connection automatically removes the subscription. `stop()`
+  also clears the event mask while the connection is healthy.
 
-For Phase 2, the intended X11 implementation uses Rust `x11rb` bindings with
-the X Input and XTEST extensions. It will only be introduced in the Linux
-backend/injector crates.
+XRecord was not selected because XInput2 provides the required device events
+directly without a second recording connection. Commands such as `xinput`,
+`xev`, and `xdotool` are never executed.
+
+Raw XInput2 events contain keycodes, not final text. `libxkbcommon-x11` loads
+the X server's active XKB keymap and state, resolves layout/group/Shift/Caps
+Lock, then produces the keysym used by the platform-neutral decoder. Keycodes
+are never hard-coded as ASCII.
+
+Important: raw events are observation-only. The Phase 2
+`KeyboardDecision::{PassThrough, Consume}` mapping describes the decision
+boundary, but is not applied to the X server. Phase 3 will require a separate,
+carefully scoped interception/injection mechanism; this backend does not
+pretend raw event selection can consume keys.
+
+References: [XInput2 selection](https://xorg.freedesktop.org/archive/X11R7.5/doc/man/man3/XISelectEvents.3.html),
+[XInput protocol](https://www.x.org/docs/Xi/proto.pdf),
+[libxkbcommon X11 support](https://xkbcommon.org/doc/current/group__x11.html),
+[libxkbcommon keyboard state](https://xkbcommon.org/doc/current/group__state.html).
+
+## Crates and licenses
+
+Runtime dependencies added for Phase 2:
+
+- `x11rb` 0.14 — X11/XInput2 protocol and XCB connection; MIT/Apache-2.0.
+- `xkbcommon` 0.9 — safe wrappers around system `libxkbcommon`; MIT.
+- `xkeysym` 0.2 — keysym constants and Unicode conversion;
+  MIT/Apache-2.0/Zlib.
+- `thiserror` — typed backend errors; MIT/Apache-2.0.
+- `tracing` — structured logging; MIT.
+- `tracing-subscriber` — debug binary logging; MIT.
+
+The `x11rb` and `xkbcommon` dependencies are Linux-target-only. The repository
+contains no project-authored `unsafe`; the audited FFI crates encapsulate the
+native XCB/XKB calls.
 
 ## Requirements
+
+General:
 
 - Rust stable 1.85 or newer
 - Cargo
 
-The core builds on any platform supported by Rust. A Linux graphical session is
-not required for Phase 1.
+Ubuntu/Debian packages for the Linux X11 binaries:
+
+```bash
+sudo apt install build-essential pkg-config libxcb1-dev \
+  libxkbcommon-dev libxkbcommon-x11-dev
+```
+
+At runtime, `$DISPLAY` must point to a reachable X server that supports
+XInput2 2.0 or newer and XKB. Root access is neither needed nor supported.
 
 ## Build
 
 ```bash
 cargo build --workspace
-cargo build --release --workspace
+cargo build --workspace --release
 ```
 
-The Phase 1 release binary is `openkey-core-test`. The final
-`openkey-rs` and `openkey-rs-settings` binaries belong to later phases.
+Phase 2 release binaries are:
+
+```text
+openkey-core-test
+keyboard-debug
+keyboard-core-debug
+```
 
 ## Run
 
-Telex from an argument:
+Core-only Telex and VNI:
 
 ```bash
 cargo run -p openkey-core-test -- "tieengs Vieejt"
 # tiếng Việt
-```
 
-VNI:
-
-```bash
 cargo run -p openkey-core-test -- --vni "tie6ng1 Vie65t"
 # tiếng Việt
 ```
 
-With no argument, the CLI reads standard input.
-
-## Tests and benchmark
+Raw X11 decoder:
 
 ```bash
-cargo test --workspace
-cargo bench -p vietnamese-core --bench process_key
+cargo run -p keyboard-debug
 ```
 
-Tests cover the required Telex/VNI forms, uppercase handling, smart tone,
-runtime method switching, restore typing, grapheme-safe backspace, and NFC.
+Example output:
+
+```text
+X11 keyboard backend started.
+
+Press keys (Escape exits)...
+KeyPress Character('a') modifiers=[]
+KeyRelease Character('a') modifiers=[]
+KeyPress Character('A') modifiers=[SHIFT]
+KeyRelease Character('A') modifiers=[SHIFT]
+```
+
+X11 to Vietnamese engine, with actions printed but never injected:
+
+```bash
+cargo run -p keyboard-core-debug
+```
+
+Press Escape to stop either debug binary cleanly. Use `RUST_LOG=debug` to see
+per-key tracing; key content is never logged at `info`.
+
+## Key events and modifiers
+
+The shared event model distinguishes `Press` and `Release` and supports:
+
+- Unicode `Character(char)` without assuming a US keycode layout.
+- Backspace, Enter, Escape, Tab, Space, Delete, and Insert.
+- arrows, Home, End, PageUp, and PageDown.
+- Shift, Control, Alt, Super, CapsLock, NumLock, and F1–F12.
+- Shift, Ctrl, Alt, Super, Caps Lock, and Num Lock modifier state.
+
+`Ctrl+A` remains `Character('a')` plus `ctrl = true`; it is not converted into
+a control character.
+
+## Auto-repeat
+
+The backend relies entirely on X11 repeat. It creates no repeat timer. On
+XInput 2.2, `KeyRepeat` raw press events are emitted as additional `Press`
+events and are not applied twice to the local XKB state. With an older XInput2
+server, its native release/press sequence is forwarded as received. In either
+case the event loop remains blocking and does not poll.
 
 ## Configuration
 
-The future daemon will load `$XDG_CONFIG_HOME/openkey-rs/config.toml` (falling
-back to `~/.config/openkey-rs/config.toml`). The planned defaults are in
-`config/default.toml`. Phase 1 consumes `EngineConfig` directly and performs no
-filesystem access.
-
-`restore_key = "z"` restores the current transformed composition to its exact
-raw keystrokes. For example, `tieengsz` displays `tieengs`.
+The future daemon will load `$XDG_CONFIG_HOME/openkey-rs/config.toml`, falling
+back to `~/.config/openkey-rs/config.toml`. Defaults are in
+`config/default.toml`. Phase 2 performs no config file writes.
 
 ## Telex
 
-Implemented shapes: `dd`, `aa`, `aw`, `ee`, `oo`, `ow`, `uw` and their
-uppercase variants. Tones are `s`, `f`, `r`, `x`, `j`. Tone keys may arrive
-before the final consonant, as in `Tieesng -> Tiếng`.
+Implemented shapes: `dd`, `aa`, `aw`, `ee`, `oo`, `ow`, `uw`, including
+uppercase. Tone keys are `s`, `f`, `r`, `x`, and `j`.
 
 ## VNI
 
-Implemented tones are `1` through `5`; shapes are `6` (â/ê/ô), `7` (ơ/ư),
-`8` (ă), and `9` (đ).
+Implemented tones are `1`–`5`; shape keys are `6` (â/ê/ô), `7` (ơ/ư), `8`
+(ă), and `9` (đ).
 
-## X11 support
+## Tests and validation
 
-**Status: not implemented until Phase 2/3.** X11 can support the intended
-design: X Input provides event selection/grabbing and XTEST can synthesize core
-key events. The backend must explicitly preserve Ctrl/Alt/Super shortcuts and
-tag or otherwise suppress self-injected events.
+```bash
+cargo fmt --all -- --check
+cargo check --workspace
+cargo test --workspace
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo build --workspace --release
+```
 
-References: [X Input extension](https://www.x.org/releases/current/doc/libXi/inputlib.pdf),
-[XTEST protocol](https://www.x.org/releases/current/doc/xextproto/xtest.pdf).
+The keysym decoder is unit-tested independently of a display. A real X11
+server is still required for the manual capture tests below.
+
+## Manual X11 checklist
+
+Run `cargo run -p keyboard-debug`, then verify:
+
+- Basic: `a b c 1 2 3`
+- Shift: `A B C ! @ #`
+- Ctrl: Ctrl+A/C/V/X/Z
+- Alt: Alt+A and Alt+Tab
+- Super: Super+A
+- Special: Backspace, Enter, Tab, Space, Delete, Insert, arrows, Home, End,
+  PageUp, PageDown, F1–F12
+- Locks: Caps Lock + `a`, Num Lock + keypad keys
+- Repeat: hold `a`; events continue without increased idle CPU
+
+Run `cargo run -p keyboard-core-debug` and type `tieengs`. The final printed
+core state must be `tiếng`; the focused application will still receive the
+original keys because Phase 2 does not consume or inject.
+
+## Error handling and troubleshooting
+
+- `DISPLAY is not set`: run inside an X11 session and check `$DISPLAY`.
+- `failed to connect to X11 display`: verify X authority and that the display
+  is reachable.
+- `XInput2 is unavailable`: use an X server with XInput2 2.0 or newer.
+- On Wayland, an XWayland `$DISPLAY` only observes the X11/XWayland scope and
+  is not a global Wayland backend.
+
+Runtime paths return typed errors instead of panicking. Losing the X11
+connection marks the backend stopped and exits the debug program cleanly.
 
 ## Wayland limitations
 
-**Status: unsupported in Phase 1 and not claimed as globally functional.** A
-normal Wayland client receives keyboard events for its focused surface; it
-cannot globally observe and rewrite other clients' input. `libinput` is an input
-stack for compositors, not a normal application API. The unstable input-method
-and virtual-keyboard protocols are compositor-controlled and are not guaranteed
-to be advertised or authorized.
-
-Consequently, Phase 7 must expose capability detection and an explicit
-limited/unsupported result when the compositor provides no suitable trusted
-protocol. Reading `/dev/input` directly is not treated as a transparent
-solution because it changes device-permission and security requirements.
+Wayland is not implemented in Phase 2. A normal Wayland client cannot globally
+observe and rewrite other clients' keyboard input. `libinput` is intended for
+compositors rather than ordinary applications, and compositor-controlled
+input-method/virtual-keyboard protocols are not universally available.
 
 References: [Wayland protocol model](https://wayland.freedesktop.org/docs/book/Protocol.html),
-[libinput documentation](https://wayland.freedesktop.org/libinput/doc/latest/),
-[input-method protocol](https://gitlab.freedesktop.org/wayland/wayland-protocols/-/blob/main/unstable/input-method/input-method-unstable-v2.xml),
-[virtual-keyboard protocol](https://gitlab.freedesktop.org/wayland/wayland-protocols/-/blob/main/unstable/virtual-keyboard/virtual-keyboard-unstable-v1.xml).
+[libinput documentation](https://wayland.freedesktop.org/libinput/doc/latest/).
 
-## Install
+## Install, autostart, and uninstall
 
-Packaging and installation are Phase 6 work. During Phase 1, run through Cargo
-or copy the release `openkey-core-test` binary for local testing.
-
-## Autostart
-
-Not applicable to the Phase 1 CLI. A systemd user service is planned for the
-daemon; the settings GUI will not need to autostart.
-
-## Troubleshooting
-
-- If output is unchanged, confirm the desired method (`--vni` is required for
-  VNI in the CLI).
-- Run `cargo test --workspace` before reporting parser regressions.
-- The CLI is a core demonstration, not a global keyboard hook.
-
-## Uninstall
-
-No system files are installed in Phase 1. Remove any copied test binary and run
-`cargo clean` if build artifacts are no longer needed.
+Packaging and autostart are Phase 6 work. Phase 2 installs no system files.
+Use Cargo to run the binaries; remove copied binaries and use `cargo clean` to
+delete build artifacts.
 
 ## Roadmap
 
 1. Vietnamese core and CLI — complete.
-2. X11 keyboard backend.
-3. X11 text injection.
+2. X11 keyboard backend and debug integration — complete.
+3. X11 text injection/interception.
 4. Daemon and Unix-domain-socket IPC.
 5. Native egui settings application.
 6. systemd user autostart and Debian-first packaging.
-7. Wayland capability research/backend with limitations reported honestly.
+7. Wayland capability research/backend with explicit limitations.

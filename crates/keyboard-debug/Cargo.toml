@@ -1,0 +1,13 @@
+[package]
+name = "keyboard-debug"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+keyboard-linux = { path = "../keyboard-linux" }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+vietnamese-core = { path = "../vietnamese-core" }
+

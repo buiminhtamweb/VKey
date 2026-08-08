@@ -10,4 +10,4 @@ pub mod word;
 
 pub use config::{EngineConfig, InputMethod};
 pub use engine::{EngineAction, InputEngine};
-pub use key::{Key, KeyEvent, Modifiers};
+pub use key::{Key, KeyEvent, KeyState, Modifiers};

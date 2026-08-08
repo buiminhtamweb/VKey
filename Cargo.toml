@@ -2,6 +2,10 @@
 members = [
     "crates/vietnamese-core",
     "crates/core-test",
+    "crates/keyboard-linux",
+    "crates/keyboard-debug",
+    "crates/keyboard-core-debug",
+    "crates/openkey-rs",
 ]
 resolver = "2"
 
@@ -15,4 +19,17 @@ rust-version = "1.85"
 serde = { version = "1.0.229", features = ["derive"] }
 unicode-normalization = "0.1.25"
 unicode-segmentation = "1.13.3"
+thiserror = "2.0.19"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["ansi", "env-filter", "fmt"] }
+xkeysym = "0.2.1"
 
+[workspace.dependencies.x11rb]
+version = "0.14.0"
+default-features = false
+features = ["allow-unsafe-code", "xinput", "xtest"]
+
+[workspace.dependencies.xkbcommon]
+version = "0.9.0"
+default-features = false
+features = ["x11"]

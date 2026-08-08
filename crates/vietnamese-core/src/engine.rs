@@ -11,7 +11,10 @@ pub enum EngineAction {
     Consume,
     PassThrough,
     Commit(String),
-    Replace { backspaces: usize, text: String },
+    Replace {
+        delete_graphemes: usize,
+        text: String,
+    },
 }
 
 pub struct InputEngine {
@@ -28,7 +31,7 @@ impl InputEngine {
     }
 
     pub fn process_key(&mut self, event: KeyEvent) -> EngineAction {
-        if !event.pressed {
+        if !event.is_pressed() {
             return EngineAction::PassThrough;
         }
         if !self.config.enabled
@@ -98,6 +101,11 @@ impl InputEngine {
         self.config.input_method = input_method;
         self.reset();
     }
+
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.config.enabled = enabled;
+        self.reset();
+    }
 }
 
 fn is_delimiter(character: char, method: InputMethod) -> bool {
@@ -124,11 +132,14 @@ fn replacement(old: &str, new: &str) -> EngineAction {
         new_suffix_byte = new_index + new_grapheme.len();
     }
 
-    let backspaces = old_iter.count();
+    let delete_graphemes = old_iter.count();
     let text = new[new_suffix_byte..].to_owned();
-    if backspaces == 0 && text.is_empty() {
+    if delete_graphemes == 0 && text.is_empty() {
         EngineAction::Consume
     } else {
-        EngineAction::Replace { backspaces, text }
+        EngineAction::Replace {
+            delete_graphemes,
+            text,
+        }
     }
 }
