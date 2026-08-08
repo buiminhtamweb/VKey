@@ -726,34 +726,57 @@ mod platform {
 pub use platform::X11KeyboardBackend;
 
 #[cfg(not(target_os = "linux"))]
-#[derive(Debug, Default)]
 pub struct X11KeyboardBackend {
     running: bool,
+    queue: std::collections::VecDeque<vietnamese_core::KeyEvent>,
+}
+
+#[cfg(not(target_os = "linux"))]
+impl std::fmt::Debug for X11KeyboardBackend {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("X11KeyboardBackend")
+            .field("running", &self.running)
+            .finish()
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
 impl X11KeyboardBackend {
     pub fn new() -> Result<Self> {
-        Err(KeyboardError::UnsupportedPlatform)
+        println!("------------------------------------------------------------");
+        println!("WARNING: X11 keyboard backend is only supported on Linux.");
+        println!("Running in Mock Stdin Keyboard mode for Windows/macOS dev.");
+        println!("Type characters and press Enter to simulate typing.");
+        println!("Available escape sequences: \\b (backspace), \\esc (escape), \\enter, \\space, \\tab");
+        println!("Type 'exit' or press Ctrl+C to terminate.");
+        println!("------------------------------------------------------------");
+        Ok(Self {
+            running: false,
+            queue: std::collections::VecDeque::new(),
+        })
     }
 
     pub(crate) fn focused_window(&self) -> Result<Option<WindowId>> {
-        Err(KeyboardError::UnsupportedPlatform)
+        Ok(Some(WindowId(42)))
     }
 
-    pub(crate) fn inject_text(&mut self, _text: &str) -> Result<()> {
-        Err(KeyboardError::UnsupportedPlatform)
+    pub(crate) fn inject_text(&mut self, text: &str) -> Result<()> {
+        println!("  >> [MOCK INJECT] Text: {:?}", text);
+        Ok(())
     }
 
-    pub(crate) fn delete_graphemes(&mut self, _count: usize) -> Result<()> {
-        Err(KeyboardError::UnsupportedPlatform)
+    pub(crate) fn delete_graphemes(&mut self, count: usize) -> Result<()> {
+        println!("  << [MOCK DELETE] Grapheme count: {}", count);
+        Ok(())
     }
 }
 
 #[cfg(not(target_os = "linux"))]
 impl KeyboardBackend for X11KeyboardBackend {
     fn start(&mut self) -> Result<()> {
-        Err(KeyboardError::UnsupportedPlatform)
+        self.running = true;
+        Ok(())
     }
 
     fn stop(&mut self) -> Result<()> {
@@ -762,11 +785,73 @@ impl KeyboardBackend for X11KeyboardBackend {
     }
 
     fn next_event(&mut self) -> Result<vietnamese_core::KeyEvent> {
-        Err(KeyboardError::UnsupportedPlatform)
+        use std::io::{self, BufRead};
+        use vietnamese_core::{Key, KeyEvent};
+
+        if !self.running {
+            return Err(KeyboardError::NotRunning);
+        }
+
+        while self.queue.is_empty() {
+            let mut input = String::new();
+            let stdin = io::stdin();
+            let mut handle = stdin.lock();
+            if handle.read_line(&mut input).is_err() {
+                return Err(KeyboardError::ConnectionLost("failed to read from stdin".to_owned()));
+            }
+
+            // Remove trailing newline
+            let trimmed = input.trim_end_matches(['\r', '\n']);
+            
+            // Check for exit command
+            if trimmed == "exit" {
+                println!("Exiting mock mode...");
+                std::process::exit(0);
+            }
+
+            let mut chars = trimmed.chars().peekable();
+            while let Some(c) = chars.next() {
+                if c == '\\' {
+                    let mut seq = String::new();
+                    while let Some(&next_c) = chars.peek() {
+                        if next_c.is_alphabetic() {
+                            seq.push(chars.next().unwrap());
+                        } else {
+                            break;
+                        }
+                    }
+                    match seq.as_str() {
+                        "backspace" | "b" => self.queue.push_back(KeyEvent::press(Key::Backspace)),
+                        "escape" | "esc" => self.queue.push_back(KeyEvent::press(Key::Escape)),
+                        "enter" => self.queue.push_back(KeyEvent::press(Key::Enter)),
+                        "space" => self.queue.push_back(KeyEvent::press(Key::Space)),
+                        "tab" => self.queue.push_back(KeyEvent::press(Key::Tab)),
+                        "" => {
+                            self.queue.push_back(KeyEvent::character('\\'));
+                        }
+                        _ => {
+                            self.queue.push_back(KeyEvent::character('\\'));
+                            for sc in seq.chars() {
+                                self.queue.push_back(KeyEvent::character(sc));
+                            }
+                        }
+                    }
+                } else {
+                    self.queue.push_back(KeyEvent::character(c));
+                }
+            }
+
+            // Add an Enter press at the end of the line if the user typed something and we didn't end with Escape
+            if !trimmed.is_empty() && trimmed != "escape" && trimmed != "esc" && trimmed != "exit" {
+                self.queue.push_back(KeyEvent::press(Key::Enter));
+            }
+        }
+
+        Ok(self.queue.pop_front().unwrap_or_else(|| KeyEvent::press(Key::Unknown)))
     }
 
     fn decide(&mut self, _decision: KeyboardDecision) -> Result<()> {
-        Err(KeyboardError::UnsupportedPlatform)
+        Ok(())
     }
 
     fn is_running(&self) -> bool {
