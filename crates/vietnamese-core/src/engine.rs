@@ -55,23 +55,33 @@ impl InputEngine {
             {
                 let old = self.composition.rendered().to_owned();
                 self.composition.restore();
-                replacement(&old, self.composition.rendered())
+                let old_conv = crate::charset::convert(&old, self.config.charset);
+                let new_conv =
+                    crate::charset::convert(self.composition.rendered(), self.config.charset);
+                replacement(&old_conv, &new_conv)
             }
             Key::Character(character) => {
                 let old = self.composition.rendered().to_owned();
                 self.composition
                     .push(character, self.config.input_method, self.config.smart_tone);
                 let new = self.composition.rendered();
-                if new.strip_prefix(&old) == Some(character.encode_utf8(&mut [0; 4])) {
+
+                let old_conv = crate::charset::convert(&old, self.config.charset);
+                let new_conv = crate::charset::convert(new, self.config.charset);
+
+                if new_conv.strip_prefix(&old_conv) == Some(character.encode_utf8(&mut [0; 4])) {
                     EngineAction::PassThrough
                 } else {
-                    replacement(&old, new)
+                    replacement(&old_conv, &new_conv)
                 }
             }
             Key::Backspace if !self.composition.is_empty() => {
                 let old = self.composition.rendered().to_owned();
                 self.composition.backspace();
-                replacement(&old, self.composition.rendered())
+                let old_conv = crate::charset::convert(&old, self.config.charset);
+                let new_conv =
+                    crate::charset::convert(self.composition.rendered(), self.config.charset);
+                replacement(&old_conv, &new_conv)
             }
             _ => {
                 self.reset();

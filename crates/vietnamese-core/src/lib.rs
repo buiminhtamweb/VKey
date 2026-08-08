@@ -1,3 +1,4 @@
+pub mod charset;
 pub mod composition;
 pub mod config;
 pub mod engine;
@@ -8,6 +9,7 @@ pub mod unicode;
 pub mod vni;
 pub mod word;
 
-pub use config::{EngineConfig, InputMethod};
+pub use charset::Charset;
+pub use config::{EngineConfig, InputMethod, ShortcutKey};
 pub use engine::{EngineAction, InputEngine};
 pub use key::{Key, KeyEvent, KeyState, Modifiers};

@@ -87,27 +87,51 @@ fi
 info "Compiling release binaries..."
 cargo build --workspace --release
 
-# 5. Packaging
+# 5. OS Detection & Packaging
+OS_TYPE=$(uname -s)
+case "$OS_TYPE" in
+    Linux*)
+        OS_NAME="linux"
+        BIN_EXT=""
+        ARCHIVE_EXT="tar.gz"
+        ;;
+    Darwin*)
+        OS_NAME="macos"
+        BIN_EXT=""
+        ARCHIVE_EXT="tar.gz"
+        ;;
+    CYGWIN*|MINGW*|MSYS*|Windows_NT*)
+        OS_NAME="windows"
+        BIN_EXT=".exe"
+        ARCHIVE_EXT="zip"
+        ;;
+    *)
+        OS_NAME="unknown"
+        BIN_EXT=""
+        ARCHIVE_EXT="tar.gz"
+        ;;
+esac
+
+info "Detected operating system: ${OS_NAME} (Binary suffix: '${BIN_EXT}')"
+
 DIST_DIR="target/dist"
-PKG_NAME="openkey-rs-${VERSION}"
+PKG_NAME="openkey-rs-${VERSION}-${OS_NAME}"
 PKG_DIR="${DIST_DIR}/${PKG_NAME}"
-ARCHIVE_PATH="${DIST_DIR}/${PKG_NAME}.tar.gz"
 
 info "Creating package directory in ${PKG_DIR}..."
 rm -rf "${DIST_DIR}"
 mkdir -p "${PKG_DIR}/bin"
 mkdir -p "${PKG_DIR}/config"
 
-# Copy binary helper to handle optional .exe suffix (e.g., Windows build environment using Git Bash)
+# Copy binary helper using detected BIN_EXT
 copy_binary() {
     local bin_name=$1
     local dest=$2
-    if [ -f "target/release/${bin_name}" ]; then
-        cp "target/release/${bin_name}" "$dest"
-    elif [ -f "target/release/${bin_name}.exe" ]; then
-        cp "target/release/${bin_name}.exe" "$dest"
+    local src_path="target/release/${bin_name}${BIN_EXT}"
+    if [ -f "$src_path" ]; then
+        cp "$src_path" "$dest"
     else
-        error "Binary ${bin_name} not found in target/release/"
+        error "Binary ${bin_name}${BIN_EXT} not found in target/release/"
         exit 1
     fi
 }
@@ -129,14 +153,20 @@ if [ -f "README.md" ]; then
 fi
 
 # Create archive
-info "Compressing into ${ARCHIVE_PATH}..."
-if command -v tar &> /dev/null; then
-    (cd target/dist && tar -czf "${PKG_NAME}.tar.gz" "${PKG_NAME}")
+if [ "$OS_NAME" = "windows" ] && command -v zip &> /dev/null; then
+    ARCHIVE_PATH="${DIST_DIR}/${PKG_NAME}.zip"
+    info "Compressing into ${ARCHIVE_PATH}..."
+    (cd target/dist && zip -r "${PKG_NAME}.zip" "${PKG_NAME}")
+    success "Packaging complete! Release archive created successfully at: ${ARCHIVE_PATH}"
+elif command -v tar &> /dev/null; then
+    ARCHIVE_PATH="${DIST_DIR}/${PKG_NAME}.${ARCHIVE_EXT}"
+    info "Compressing into ${ARCHIVE_PATH}..."
+    (cd target/dist && tar -czf "${PKG_NAME}.${ARCHIVE_EXT}" "${PKG_NAME}")
     success "Packaging complete!"
     info "Package contents:"
     tar -tf "${ARCHIVE_PATH}" | sed 's/^/  /'
     echo ""
     success "Release archive created successfully at: ${ARCHIVE_PATH}"
 else
-    warn "tar is not available. Compiled files are placed in: ${PKG_DIR}"
+    warn "Neither zip nor tar is available. Compiled files are placed in: ${PKG_DIR}"
 fi

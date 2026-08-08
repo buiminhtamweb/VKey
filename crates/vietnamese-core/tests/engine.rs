@@ -212,3 +212,60 @@ fn output_is_unicode_nfc() {
         assert_eq!(output.chars().count(), output.graphemes(true).count());
     }
 }
+
+#[test]
+fn test_telex_end_of_word_modifiers() {
+    assert_eq!(type_text("tama"), "tâm");
+    assert_eq!(type_text("toto"), "tôt");
+    assert_eq!(type_text("totos"), "tốt");
+    assert_eq!(type_text("hopos"), "hốp");
+    assert_eq!(type_text("duongw"), "dương");
+    assert_eq!(type_text("dduongw"), "đương");
+    assert_eq!(type_text("dduongwf"), "đường");
+    assert_eq!(type_text("suarw"), "sửa");
+    assert_eq!(type_text("suawr"), "sửa");
+}
+
+#[test]
+fn test_tone_toggling() {
+    assert_eq!(type_text("sangs"), "sáng");
+    assert_eq!(type_text("sangss"), "sangs");
+    assert_eq!(type_text("sangssf"), "sàngs");
+    assert_eq!(type_text("sangssr"), "sảngs");
+    assert_eq!(type_vni("sang1"), "sáng");
+    assert_eq!(type_vni("sang11"), "sang1");
+}
+
+#[test]
+fn test_shape_toggling() {
+    assert_eq!(type_text("ooo"), "oo");
+    assert_eq!(type_text("eee"), "ee");
+    assert_eq!(type_text("aaa"), "aa");
+    assert_eq!(type_text("ddd"), "dd");
+    assert_eq!(type_vni("a66"), "a6");
+}
+
+#[test]
+fn test_charsets() {
+    use vietnamese_core::Charset;
+
+    let config_tcvn3 = EngineConfig {
+        charset: Charset::Tcvn3,
+        ..EngineConfig::default()
+    };
+    assert_eq!(
+        type_text_with_config("tieengs", config_tcvn3.clone()),
+        "tiÕng"
+    );
+
+    let config_vni = EngineConfig {
+        charset: Charset::Vni,
+        ..EngineConfig::default()
+    };
+    assert_eq!(
+        type_text_with_config("tieengs", config_vni.clone()),
+        "tieáng"
+    );
+    assert_eq!(type_text_with_config("dduongwf", config_tcvn3), "®õêng");
+    assert_eq!(type_text_with_config("dduongwf", config_vni), "ñöôøng");
+}

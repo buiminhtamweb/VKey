@@ -33,6 +33,8 @@ pub enum KeyboardError {
     FocusChanged { expected: u32, actual: u32 },
     #[error("X11 connection lost: {0}")]
     ConnectionLost(String),
+    #[error("timeout waiting for next event")]
+    Timeout,
 }
 
 pub trait KeyboardBackend {

@@ -2,7 +2,7 @@ use vietnamese_core::Key;
 use xkeysym::{Keysym, key};
 
 #[cfg(not(target_os = "linux"))]
-use crate::{KeyboardBackend, KeyboardDecision, KeyboardError, Result, WindowId};
+use crate::{KeyboardBackend, KeyboardDecision, Result, WindowId};
 
 #[allow(dead_code)]
 fn key_from_keysym(raw_keysym: u32) -> Key {
@@ -725,13 +725,30 @@ mod platform {
 #[cfg(target_os = "linux")]
 pub use platform::X11KeyboardBackend;
 
-#[cfg(not(target_os = "linux"))]
-pub struct X11KeyboardBackend {
-    running: bool,
-    queue: std::collections::VecDeque<vietnamese_core::KeyEvent>,
+#[cfg(target_os = "windows")]
+use std::sync::{Mutex, OnceLock};
+
+#[cfg(target_os = "windows")]
+struct HookChannels {
+    event_tx: std::sync::mpsc::Sender<vietnamese_core::KeyEvent>,
+    decision_rx: std::sync::mpsc::Receiver<KeyboardDecision>,
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
+static HOOK_CHANNELS: OnceLock<Mutex<Option<HookChannels>>> = OnceLock::new();
+
+#[cfg(target_os = "windows")]
+static HHOOK_HANDLE: OnceLock<Mutex<isize>> = OnceLock::new();
+
+#[cfg(target_os = "windows")]
+pub struct X11KeyboardBackend {
+    running: bool,
+    event_rx: std::sync::mpsc::Receiver<vietnamese_core::KeyEvent>,
+    decision_tx: std::sync::mpsc::Sender<KeyboardDecision>,
+    hook_thread_id: u32,
+}
+
+#[cfg(target_os = "windows")]
 impl std::fmt::Debug for X11KeyboardBackend {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -741,15 +758,415 @@ impl std::fmt::Debug for X11KeyboardBackend {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
+impl X11KeyboardBackend {
+    pub fn new() -> Result<Self> {
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        let (decision_tx, decision_rx) = std::sync::mpsc::channel();
+
+        *HOOK_CHANNELS
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap() = Some(HookChannels {
+            event_tx,
+            decision_rx,
+        });
+
+        Ok(Self {
+            running: false,
+            event_rx,
+            decision_tx,
+            hook_thread_id: 0,
+        })
+    }
+
+    pub(crate) fn focused_window(&self) -> Result<Option<WindowId>> {
+        Ok(Some(WindowId(42)))
+    }
+
+    pub(crate) fn inject_text(&mut self, text: &str) -> Result<()> {
+        unsafe { inject_unicode_text(text) }
+    }
+
+    pub(crate) fn delete_graphemes(&mut self, count: usize) -> Result<()> {
+        unsafe { inject_backspaces(count) }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl KeyboardBackend for X11KeyboardBackend {
+    fn start(&mut self) -> Result<()> {
+        use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            GetMessageW, MSG, SetWindowsHookExW, WH_KEYBOARD_LL,
+        };
+
+        if self.running {
+            return Ok(());
+        }
+
+        self.running = true;
+
+        let (thread_id_tx, thread_id_rx) = std::sync::mpsc::channel();
+
+        std::thread::spawn(move || {
+            unsafe {
+                let thread_id = windows_sys::Win32::System::Threading::GetCurrentThreadId();
+                let _ = thread_id_tx.send(thread_id);
+
+                let hinstance = GetModuleHandleW(std::ptr::null());
+                let hhook =
+                    SetWindowsHookExW(WH_KEYBOARD_LL, Some(low_level_keyboard_proc), hinstance, 0);
+
+                if !hhook.is_null() {
+                    *HHOOK_HANDLE.get_or_init(|| Mutex::new(0)).lock().unwrap() = hhook as isize;
+
+                    let mut msg: MSG = std::mem::zeroed();
+                    while GetMessageW(&mut msg, std::ptr::null_mut() as _, 0, 0) > 0 {
+                        // Pump messages
+                    }
+                }
+            }
+        });
+
+        if let Ok(tid) = thread_id_rx.recv() {
+            self.hook_thread_id = tid;
+        }
+
+        Ok(())
+    }
+
+    fn stop(&mut self) -> Result<()> {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            PostThreadMessageW, UnhookWindowsHookEx, WM_QUIT,
+        };
+
+        if !self.running {
+            return Ok(());
+        }
+
+        self.running = false;
+
+        // Clear HOOK_CHANNELS to drop the channel senders
+        *HOOK_CHANNELS
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap() = None;
+
+        unsafe {
+            let mut hhook_guard = HHOOK_HANDLE.get_or_init(|| Mutex::new(0)).lock().unwrap();
+            if *hhook_guard != 0 {
+                UnhookWindowsHookEx(*hhook_guard as _);
+                *hhook_guard = 0;
+            }
+
+            if self.hook_thread_id != 0 {
+                PostThreadMessageW(self.hook_thread_id, WM_QUIT, 0, 0);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn next_event(&mut self) -> Result<vietnamese_core::KeyEvent> {
+        if !self.running {
+            return Err(crate::backend::KeyboardError::NotRunning);
+        }
+
+        self.event_rx
+            .recv_timeout(std::time::Duration::from_millis(100))
+            .map_err(|e| match e {
+                std::sync::mpsc::RecvTimeoutError::Timeout => {
+                    crate::backend::KeyboardError::Timeout
+                }
+                std::sync::mpsc::RecvTimeoutError::Disconnected => {
+                    crate::backend::KeyboardError::ConnectionLost(e.to_string())
+                }
+            })
+    }
+
+    fn decide(&mut self, decision: KeyboardDecision) -> Result<()> {
+        let _ = self.decision_tx.send(decision);
+        Ok(())
+    }
+
+    fn is_running(&self) -> bool {
+        self.running
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for X11KeyboardBackend {
+    fn drop(&mut self) {
+        let _ = self.stop();
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn low_level_keyboard_proc(
+    code: i32,
+    wparam: usize,
+    lparam: isize,
+) -> isize {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CallNextHookEx, KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    };
+
+    if code >= 0 {
+        let hook_struct = unsafe { *(lparam as *const KBDLLHOOKSTRUCT) };
+
+        // Skip VKey-injected keys (LLKHF_INJECTED = 0x10) to prevent infinite loops
+        if (hook_struct.flags & 0x10) == 0 {
+            let is_key_down = wparam == WM_KEYDOWN as usize || wparam == WM_SYSKEYDOWN as usize;
+            let is_key_up = wparam == WM_KEYUP as usize || wparam == WM_SYSKEYUP as usize;
+
+            if is_key_down || is_key_up {
+                let state = if is_key_down {
+                    vietnamese_core::KeyState::Press
+                } else {
+                    vietnamese_core::KeyState::Release
+                };
+
+                let is_extended = (hook_struct.flags & 1) != 0;
+                let key = map_vk_to_key(hook_struct.vkCode, hook_struct.scanCode, is_extended);
+                let modifiers = unsafe { get_modifiers() };
+
+                let event = vietnamese_core::KeyEvent {
+                    key,
+                    modifiers,
+                    state,
+                };
+
+                let guard = HOOK_CHANNELS
+                    .get_or_init(|| Mutex::new(None))
+                    .lock()
+                    .unwrap();
+                if let Some(channels) = guard.as_ref() {
+                    if channels.event_tx.send(event).is_ok() {
+                        // Allow 50ms for daemon thread processing
+                        if let Ok(decision) = channels
+                            .decision_rx
+                            .recv_timeout(std::time::Duration::from_millis(50))
+                        {
+                            if decision == KeyboardDecision::Consume {
+                                return 1; // Consume key event
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let hhook = *HHOOK_HANDLE.get_or_init(|| Mutex::new(0)).lock().unwrap() as _;
+    unsafe { CallNextHookEx(hhook, code, wparam, lparam) }
+}
+
+#[cfg(target_os = "windows")]
+fn map_vk_to_key(vk: u32, scan_code: u32, is_extended: bool) -> vietnamese_core::Key {
+    use vietnamese_core::Key;
+    match vk {
+        0x08 => Key::Backspace,
+        0x0D => Key::Enter,
+        0x1B => Key::Escape,
+        0x09 => Key::Tab,
+        0x20 => Key::Space,
+        0x2E => Key::Delete,
+        0x25 => Key::Left,
+        0x27 => Key::Right,
+        0x26 => Key::Up,
+        0x28 => Key::Down,
+        0x24 => Key::Home,
+        0x23 => Key::End,
+        0x21 => Key::PageUp,
+        0x22 => Key::PageDown,
+        0x2D => Key::Insert,
+        0x14 => Key::CapsLock,
+        0x90 => Key::NumLock,
+        0x91 => Key::Unknown, // Map ScrollLock to Unknown since vietnamese_core::Key doesn't have it
+        0x10 | 0xA0 | 0xA1 => Key::Shift,
+        0x11 | 0xA2 | 0xA3 => Key::Control,
+        0x12 | 0xA4 | 0xA5 => Key::Alt,
+        0x5B | 0x5C => Key::Super,
+        0x70..=0x87 => Key::F((vk - 0x70 + 1) as u8),
+        _ => unsafe {
+            if let Some(c) = vk_to_char(vk, scan_code, is_extended) {
+                Key::Character(c)
+            } else {
+                Key::Unknown
+            }
+        },
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn vk_to_char(vk: u32, scan_code: u32, is_extended: bool) -> Option<char> {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyboardState, ToUnicode};
+
+    let mut keyboard_state = [0u8; 256];
+    if unsafe { GetKeyboardState(keyboard_state.as_mut_ptr()) } == 0 {
+        return None;
+    }
+
+    let mut buffer = [0u16; 8];
+    let flags = if is_extended { 1 } else { 0 };
+    let len = unsafe {
+        ToUnicode(
+            vk,
+            scan_code,
+            keyboard_state.as_ptr(),
+            buffer.as_mut_ptr(),
+            buffer.len() as i32,
+            flags,
+        )
+    };
+
+    if len > 0 {
+        let text = String::from_utf16_lossy(&buffer[..len as usize]);
+        text.chars().next()
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn get_modifiers() -> vietnamese_core::Modifiers {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        GetKeyState, VK_CAPITAL, VK_CONTROL, VK_LWIN, VK_MENU, VK_NUMLOCK, VK_RWIN, VK_SHIFT,
+    };
+
+    let ctrl = unsafe { GetKeyState(VK_CONTROL as i32) < 0 };
+    let shift = unsafe { GetKeyState(VK_SHIFT as i32) < 0 };
+    let alt = unsafe { GetKeyState(VK_MENU as i32) < 0 };
+    let super_key =
+        unsafe { (GetKeyState(VK_LWIN as i32) < 0) || (GetKeyState(VK_RWIN as i32) < 0) };
+    let caps_lock = unsafe { (GetKeyState(VK_CAPITAL as i32) & 1) != 0 };
+    let num_lock = unsafe { (GetKeyState(VK_NUMLOCK as i32) & 1) != 0 };
+
+    vietnamese_core::Modifiers {
+        ctrl,
+        shift,
+        alt,
+        super_key,
+        caps_lock,
+        num_lock,
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn inject_unicode_text(text: &str) -> Result<()> {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, SendInput,
+    };
+
+    let mut inputs = Vec::new();
+    for c in text.encode_utf16() {
+        inputs.push(INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: 0,
+                    wScan: c,
+                    dwFlags: KEYEVENTF_UNICODE,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        });
+        inputs.push(INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: 0,
+                    wScan: c,
+                    dwFlags: KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        });
+    }
+
+    if !inputs.is_empty() {
+        unsafe {
+            SendInput(
+                inputs.len() as u32,
+                inputs.as_ptr(),
+                std::mem::size_of::<INPUT>() as i32,
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn inject_backspaces(count: usize) -> Result<()> {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VK_BACK,
+    };
+
+    let mut inputs = Vec::new();
+    for _ in 0..count {
+        inputs.push(INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_BACK,
+                    wScan: 0,
+                    dwFlags: 0,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        });
+        inputs.push(INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_BACK,
+                    wScan: 0,
+                    dwFlags: KEYEVENTF_KEYUP,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        });
+    }
+
+    if !inputs.is_empty() {
+        unsafe {
+            SendInput(
+                inputs.len() as u32,
+                inputs.as_ptr(),
+                std::mem::size_of::<INPUT>() as i32,
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
+pub struct X11KeyboardBackend {
+    running: bool,
+    queue: std::collections::VecDeque<vietnamese_core::KeyEvent>,
+}
+
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
+impl std::fmt::Debug for X11KeyboardBackend {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("X11KeyboardBackend")
+            .field("running", &self.running)
+            .finish()
+    }
+}
+
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 impl X11KeyboardBackend {
     pub fn new() -> Result<Self> {
         println!("------------------------------------------------------------");
-        println!("WARNING: X11 keyboard backend is only supported on Linux.");
-        println!("Running in Mock Stdin Keyboard mode for Windows/macOS dev.");
-        println!("Type characters and press Enter to simulate typing.");
-        println!("Available escape sequences: \\b (backspace), \\esc (escape), \\enter, \\space, \\tab");
-        println!("Type 'exit' or press Ctrl+C to terminate.");
+        println!("WARNING: Keyboard hook backend is not implemented on this OS.");
+        println!("Running in Mock Stdin Keyboard mode for simulation.");
         println!("------------------------------------------------------------");
         Ok(Self {
             running: false,
@@ -772,7 +1189,7 @@ impl X11KeyboardBackend {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 impl KeyboardBackend for X11KeyboardBackend {
     fn start(&mut self) -> Result<()> {
         self.running = true;
@@ -789,7 +1206,7 @@ impl KeyboardBackend for X11KeyboardBackend {
         use vietnamese_core::{Key, KeyEvent};
 
         if !self.running {
-            return Err(KeyboardError::NotRunning);
+            return Err(crate::backend::KeyboardError::NotRunning);
         }
 
         while self.queue.is_empty() {
@@ -797,13 +1214,13 @@ impl KeyboardBackend for X11KeyboardBackend {
             let stdin = io::stdin();
             let mut handle = stdin.lock();
             if handle.read_line(&mut input).is_err() {
-                return Err(KeyboardError::ConnectionLost("failed to read from stdin".to_owned()));
+                return Err(crate::backend::KeyboardError::ConnectionLost(
+                    "failed to read from stdin".to_owned(),
+                ));
             }
 
-            // Remove trailing newline
             let trimmed = input.trim_end_matches(['\r', '\n']);
-            
-            // Check for exit command
+
             if trimmed == "exit" {
                 println!("Exiting mock mode...");
                 std::process::exit(0);
@@ -826,6 +1243,38 @@ impl KeyboardBackend for X11KeyboardBackend {
                         "enter" => self.queue.push_back(KeyEvent::press(Key::Enter)),
                         "space" => self.queue.push_back(KeyEvent::press(Key::Space)),
                         "tab" => self.queue.push_back(KeyEvent::press(Key::Tab)),
+                        "toggle" | "ctrlshift" => {
+                            self.queue.push_back(KeyEvent {
+                                key: Key::Control,
+                                modifiers: vietnamese_core::Modifiers {
+                                    ctrl: true,
+                                    ..Default::default()
+                                },
+                                state: vietnamese_core::KeyState::Press,
+                            });
+                            self.queue.push_back(KeyEvent {
+                                key: Key::Shift,
+                                modifiers: vietnamese_core::Modifiers {
+                                    ctrl: true,
+                                    shift: true,
+                                    ..Default::default()
+                                },
+                                state: vietnamese_core::KeyState::Press,
+                            });
+                            self.queue.push_back(KeyEvent {
+                                key: Key::Shift,
+                                modifiers: vietnamese_core::Modifiers {
+                                    ctrl: true,
+                                    ..Default::default()
+                                },
+                                state: vietnamese_core::KeyState::Release,
+                            });
+                            self.queue.push_back(KeyEvent {
+                                key: Key::Control,
+                                modifiers: Default::default(),
+                                state: vietnamese_core::KeyState::Release,
+                            });
+                        }
                         "" => {
                             self.queue.push_back(KeyEvent::character('\\'));
                         }
@@ -841,13 +1290,15 @@ impl KeyboardBackend for X11KeyboardBackend {
                 }
             }
 
-            // Add an Enter press at the end of the line if the user typed something and we didn't end with Escape
             if !trimmed.is_empty() && trimmed != "escape" && trimmed != "esc" && trimmed != "exit" {
                 self.queue.push_back(KeyEvent::press(Key::Enter));
             }
         }
 
-        Ok(self.queue.pop_front().unwrap_or_else(|| KeyEvent::press(Key::Unknown)))
+        Ok(self
+            .queue
+            .pop_front()
+            .unwrap_or_else(|| KeyEvent::press(Key::Unknown)))
     }
 
     fn decide(&mut self, _decision: KeyboardDecision) -> Result<()> {

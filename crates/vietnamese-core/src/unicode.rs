@@ -81,6 +81,32 @@ pub(crate) fn plain_base(character: char) -> Option<char> {
     }
 }
 
+pub(crate) fn shape_of(character: char) -> Option<Shape> {
+    let stripped = strip_tone(character).to_lowercase().next()?;
+    match stripped {
+        'ă' => Some(Shape::Breve),
+        'â' | 'ê' | 'ô' => Some(Shape::Circumflex),
+        'ơ' | 'ư' => Some(Shape::Horn),
+        'đ' => Some(Shape::Stroke),
+        _ => None,
+    }
+}
+
+pub(crate) fn strip_shape(character: char) -> char {
+    let tone = tone_of(character);
+    let uppercase = character.is_uppercase();
+    if let Some(base) = plain_base(character) {
+        let plain = if uppercase {
+            base.to_ascii_uppercase()
+        } else {
+            base
+        };
+        tone.map_or(plain, |t| apply_tone(plain, t))
+    } else {
+        character
+    }
+}
+
 pub(crate) fn is_plain(character: char, base: char) -> bool {
     let stripped = strip_tone(character);
     stripped.eq_ignore_ascii_case(&base) && stripped.is_ascii()

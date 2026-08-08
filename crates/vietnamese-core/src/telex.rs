@@ -13,7 +13,12 @@ pub fn transform(input: &str, smart_tone: bool) -> String {
     for character in input.chars() {
         if let Some(candidate) = Tone::from_telex(character) {
             if word::contains_vowel(&output) {
-                tone = Some(candidate);
+                if tone == Some(candidate) {
+                    tone = None;
+                    output.push(character);
+                } else {
+                    tone = Some(candidate);
+                }
                 continue;
             }
         }
@@ -40,7 +45,10 @@ fn try_stroke_d(output: &mut [char], character: char) -> bool {
     let Some(previous) = output.last_mut() else {
         return false;
     };
-    if unicode::is_plain(*previous, 'd') {
+    if unicode::shape_of(*previous) == Some(Shape::Stroke) {
+        *previous = unicode::strip_shape(*previous);
+        false
+    } else if unicode::is_plain(*previous, 'd') {
         *previous = unicode::apply_shape(*previous, Shape::Stroke).expect("d supports stroke");
         true
     } else {
@@ -53,13 +61,25 @@ fn try_circumflex(output: &mut [char], character: char) -> bool {
     if !matches!(base, 'a' | 'e' | 'o') {
         return false;
     }
-    let Some(previous) = output.last_mut() else {
-        return false;
-    };
-    if unicode::is_plain(*previous, base) {
-        *previous = unicode::apply_shape(*previous, Shape::Circumflex)
-            .expect("a, e and o support circumflex");
-        true
+
+    let target = output
+        .iter()
+        .rposition(|&c| unicode::plain_base(c) == Some(base));
+    if let Some(index) = target {
+        let c = output[index];
+        if unicode::shape_of(c) == Some(Shape::Circumflex) {
+            output[index] = unicode::strip_shape(c);
+            false
+        } else if unicode::is_plain(c, base) {
+            if let Some(shaped) = unicode::apply_shape(c, Shape::Circumflex) {
+                output[index] = shaped;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
     } else {
         false
     }
@@ -70,27 +90,74 @@ fn try_w_shape(output: &mut [char], character: char) -> bool {
         return false;
     }
 
+    // 1. Check for "uo" and "ua" sequences
+    let mut found_uo = None;
+    let mut found_ua = None;
     if output.len() >= 2 {
-        let previous = output.len() - 2;
-        let last = output.len() - 1;
-        if unicode::is_plain(output[previous], 'u') && unicode::is_plain(output[last], 'o') {
-            output[previous] =
-                unicode::apply_shape(output[previous], Shape::Horn).expect("u supports horn");
-            output[last] =
-                unicode::apply_shape(output[last], Shape::Horn).expect("o supports horn");
-            return true;
+        for i in 0..output.len() - 1 {
+            let base_i = unicode::plain_base(output[i]);
+            let base_next = unicode::plain_base(output[i + 1]);
+            if base_i == Some('u') && base_next == Some('o') {
+                found_uo = Some(i);
+                break;
+            } else if base_i == Some('u') && base_next == Some('a') {
+                found_ua = Some(i);
+                break;
+            }
         }
     }
 
-    let Some(previous) = output.last_mut() else {
-        return false;
-    };
-    let shape = match unicode::plain_base(*previous) {
-        Some('a') if unicode::is_plain(*previous, 'a') => Shape::Breve,
-        Some('o') if unicode::is_plain(*previous, 'o') => Shape::Horn,
-        Some('u') if unicode::is_plain(*previous, 'u') => Shape::Horn,
-        _ => return false,
-    };
-    *previous = unicode::apply_shape(*previous, shape).expect("validated Telex w shape");
-    true
+    if let Some(i) = found_uo {
+        let u_char = output[i];
+        let o_char = output[i + 1];
+        if unicode::shape_of(u_char) == Some(Shape::Horn)
+            || unicode::shape_of(o_char) == Some(Shape::Horn)
+        {
+            output[i] = unicode::strip_shape(u_char);
+            output[i + 1] = unicode::strip_shape(o_char);
+            false
+        } else {
+            output[i] = unicode::apply_shape(u_char, Shape::Horn).unwrap();
+            output[i + 1] = unicode::apply_shape(o_char, Shape::Horn).unwrap();
+            true
+        }
+    } else if let Some(i) = found_ua {
+        let u_char = output[i];
+        if unicode::shape_of(u_char) == Some(Shape::Horn) {
+            output[i] = unicode::strip_shape(u_char);
+            false
+        } else {
+            output[i] = unicode::apply_shape(u_char, Shape::Horn).unwrap();
+            true
+        }
+    } else {
+        // 2. Look for single vowel to modify ('u', 'o', or 'a')
+        let target = output
+            .iter()
+            .rposition(|&c| matches!(unicode::plain_base(c), Some('u' | 'o' | 'a')));
+        if let Some(index) = target {
+            let c = output[index];
+            let base = unicode::plain_base(c).unwrap();
+            let shape = if base == 'a' {
+                Shape::Breve
+            } else {
+                Shape::Horn
+            };
+            if unicode::shape_of(c) == Some(shape) {
+                output[index] = unicode::strip_shape(c);
+                false
+            } else if unicode::is_plain(c, base) {
+                if let Some(shaped) = unicode::apply_shape(c, shape) {
+                    output[index] = shaped;
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
 }

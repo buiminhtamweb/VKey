@@ -33,6 +33,15 @@ show_help() {
     echo "If no command is provided, it defaults to: run --debug-input"
 }
 
+# Detect Operating System
+OS_TYPE=$(uname -s)
+case "$OS_TYPE" in
+    Linux*)     OS_NAME="linux";;
+    Darwin*)    OS_NAME="macos";;
+    CYGWIN*|MINGW*|MSYS*|Windows_NT*) OS_NAME="windows";;
+    *)          OS_NAME="unknown";;
+esac
+
 CMD=${1:-run}
 if [ $# -gt 0 ]; then
     shift
@@ -45,6 +54,13 @@ case "$CMD" in
         if [ ${#ARGS[@]} -eq 0 ]; then
             ARGS=("--debug-input")
         fi
+        
+        info "Running on OS: ${OS_NAME}"
+        if [ "$OS_NAME" != "linux" ]; then
+            warn "You are running on a non-Linux platform (${OS_NAME})."
+            warn "The daemon will run using the interactive mock stdin keyboard backend."
+        fi
+        
         info "Starting openkey-rs daemon (debug profile) with args: ${ARGS[*]}..."
         export RUST_BACKTRACE=1
         export RUST_LOG=debug
@@ -64,11 +80,21 @@ case "$CMD" in
         success "Checks finished successfully!"
         ;;
     kbd-debug)
+        info "Running on OS: ${OS_NAME}"
+        if [ "$OS_NAME" != "linux" ]; then
+            warn "You are running on a non-Linux platform (${OS_NAME})."
+            warn "keyboard-debug will run using mock stdin input."
+        fi
         info "Starting keyboard-debug..."
         export RUST_LOG=debug
         exec cargo run -p keyboard-debug -- "$@"
         ;;
     core-debug)
+        info "Running on OS: ${OS_NAME}"
+        if [ "$OS_NAME" != "linux" ]; then
+            warn "You are running on a non-Linux platform (${OS_NAME})."
+            warn "keyboard-core-debug will run using mock stdin input."
+        fi
         info "Starting keyboard-core-debug..."
         export RUST_LOG=debug
         exec cargo run -p keyboard-core-debug -- "$@"
