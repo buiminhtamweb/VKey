@@ -3,6 +3,30 @@
 version = 4
 
 [[package]]
+name = "VKey-core-test"
+version = "0.1.0"
+dependencies = [
+ "unicode-segmentation",
+ "vietnamese-core",
+]
+
+[[package]]
+name = "VKey-rs"
+version = "0.1.0"
+dependencies = [
+ "dirs 5.0.1",
+ "eframe",
+ "keyboard-linux",
+ "serde",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "tray-icon",
+ "unicode-segmentation",
+ "vietnamese-core",
+]
+
+[[package]]
 name = "ab_glyph"
 version = "0.2.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2877,30 +2901,6 @@ name = "oorandom"
 version = "11.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
-
-[[package]]
-name = "VKey-core-test"
-version = "0.1.0"
-dependencies = [
- "unicode-segmentation",
- "vietnamese-core",
-]
-
-[[package]]
-name = "VKey-rs"
-version = "0.1.0"
-dependencies = [
- "dirs 5.0.1",
- "eframe",
- "keyboard-linux",
- "serde",
- "toml",
- "tracing",
- "tracing-subscriber",
- "tray-icon",
- "unicode-segmentation",
- "vietnamese-core",
-]
 
 [[package]]
 name = "option-ext"
