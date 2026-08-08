@@ -19,10 +19,10 @@ error() { echo -e "${RED}[ERROR]${NC} $*"; }
 show_help() {
     echo "Usage: ./dev.sh [COMMAND] [ARGS...]"
     echo ""
-    echo "Development helper script for openkey-rs."
+    echo "Development helper script for VKey-rs."
     echo ""
     echo "Commands:"
-    echo "  run [args]     Run openkey-rs with debug-input and optional arguments (default)"
+    echo "  run [args]     Run VKey-rs with debug-input and optional arguments (default)"
     echo "  test           Run all tests in the workspace"
     echo "  check          Run cargo check, format, and clippy checks"
     echo "  kbd-debug      Run X11 raw keyboard decoder debug binary"
@@ -61,10 +61,10 @@ case "$CMD" in
             warn "The daemon will run using the interactive mock stdin keyboard backend."
         fi
         
-        info "Starting openkey-rs daemon (debug profile) with args: ${ARGS[*]}..."
+        info "Starting VKey-rs daemon (debug profile) with args: ${ARGS[*]}..."
         export RUST_BACKTRACE=1
         export RUST_LOG=debug
-        exec cargo run -p openkey-rs -- "${ARGS[@]}"
+        exec cargo run -p VKey-rs -- "${ARGS[@]}"
         ;;
     test)
         info "Running workspace tests..."
@@ -100,8 +100,8 @@ case "$CMD" in
         exec cargo run -p keyboard-core-debug -- "$@"
         ;;
     test-cli)
-        info "Starting openkey-core-test CLI..."
-        exec cargo run -p openkey-core-test -- "$@"
+        info "Starting VKey-core-test CLI..."
+        exec cargo run -p VKey-core-test -- "$@"
         ;;
     help|-h|--help)
         show_help

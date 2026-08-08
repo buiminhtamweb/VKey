@@ -20,7 +20,7 @@ error() { echo -e "${RED}[ERROR]${NC} $*"; }
 show_help() {
     echo "Usage: ./build.sh [OPTIONS]"
     echo ""
-    echo "Builds and packages the openkey-rs workspace."
+    echo "Builds and packages the VKey-rs workspace."
     echo ""
     echo "Options:"
     echo "  --no-check    Skip quality checks (cargo fmt, cargo clippy, cargo test)"
@@ -115,7 +115,7 @@ esac
 info "Detected operating system: ${OS_NAME} (Binary suffix: '${BIN_EXT}')"
 
 DIST_DIR="target/dist"
-PKG_NAME="openkey-rs-${VERSION}-${OS_NAME}"
+PKG_NAME="VKey-rs-${VERSION}-${OS_NAME}"
 PKG_DIR="${DIST_DIR}/${PKG_NAME}"
 
 info "Creating package directory in ${PKG_DIR}..."
@@ -138,10 +138,10 @@ copy_binary() {
 
 # Copy binaries
 info "Copying binaries..."
-copy_binary "openkey-rs" "${PKG_DIR}/bin/"
+copy_binary "VKey-rs" "${PKG_DIR}/bin/"
 copy_binary "keyboard-debug" "${PKG_DIR}/bin/"
 copy_binary "keyboard-core-debug" "${PKG_DIR}/bin/"
-copy_binary "openkey-core-test" "${PKG_DIR}/bin/"
+copy_binary "VKey-core-test" "${PKG_DIR}/bin/"
 
 # Copy other assets
 info "Copying configuration and documents..."

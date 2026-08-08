@@ -5,7 +5,7 @@ members = [
     "crates/keyboard-linux",
     "crates/keyboard-debug",
     "crates/keyboard-core-debug",
-    "crates/openkey-rs",
+    "crates/VKey-rs",
 ]
 resolver = "2"
 

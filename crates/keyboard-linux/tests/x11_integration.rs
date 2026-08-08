@@ -8,9 +8,9 @@ use keyboard_linux::{TextInjector, X11KeyboardBackend};
 #[ignore = "requires an X11 session and a disposable focused text field"]
 fn injects_unicode_into_an_opt_in_x11_target() {
     assert_eq!(
-        std::env::var("OPENKEY_X11_INJECTION_TEST").as_deref(),
+        std::env::var("VKey_X11_INJECTION_TEST").as_deref(),
         Ok("1"),
-        "set OPENKEY_X11_INJECTION_TEST=1 only after focusing a disposable text field"
+        "set VKey_X11_INJECTION_TEST=1 only after focusing a disposable text field"
     );
 
     let mut backend = X11KeyboardBackend::new().expect("connect to X11");

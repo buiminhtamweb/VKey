@@ -715,7 +715,7 @@ mod platform {
         if env::var("XDG_SESSION_TYPE").is_ok_and(|session| session.eq_ignore_ascii_case("wayland"))
         {
             return Err(KeyboardError::X11Connection(
-                "openkey-rs Phase 3 requires X11; XDG_SESSION_TYPE is wayland".to_owned(),
+                "VKey-rs Phase 3 requires X11; XDG_SESSION_TYPE is wayland".to_owned(),
             ));
         }
         Ok(())

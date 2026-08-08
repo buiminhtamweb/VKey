@@ -118,7 +118,7 @@ cargo build --workspace --release
 Phase 2 release binaries are:
 
 ```text
-openkey-core-test
+VKey-core-test
 keyboard-debug
 keyboard-core-debug
 ```
@@ -128,10 +128,10 @@ keyboard-core-debug
 Core-only Telex and VNI:
 
 ```bash
-cargo run -p openkey-core-test -- "tieengs Vieejt"
+cargo run -p VKey-core-test -- "tieengs Vieejt"
 # tiếng Việt
 
-cargo run -p openkey-core-test -- --vni "tie6ng1 Vie65t"
+cargo run -p VKey-core-test -- --vni "tie6ng1 Vie65t"
 # tiếng Việt
 ```
 
@@ -185,8 +185,8 @@ case the event loop remains blocking and does not poll.
 
 ## Configuration
 
-The future daemon will load `$XDG_CONFIG_HOME/openkey-rs/config.toml`, falling
-back to `~/.config/openkey-rs/config.toml`. Defaults are in
+The future daemon will load `$XDG_CONFIG_HOME/VKey-rs/config.toml`, falling
+back to `~/.config/VKey-rs/config.toml`. Defaults are in
 `config/default.toml`. Phase 2 performs no config file writes.
 
 ## Telex

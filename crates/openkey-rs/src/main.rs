@@ -46,20 +46,20 @@ fn main() -> ExitCode {
         Ok(Some(options)) => options,
         Ok(None) => return ExitCode::SUCCESS,
         Err(message) => {
-            eprintln!("openkey-rs: {message}\nUse --help for usage.");
+            eprintln!("VKey-rs: {message}\nUse --help for usage.");
             return ExitCode::FAILURE;
         }
     };
 
     if let Err(error) = init_tracing() {
-        eprintln!("openkey-rs: failed to initialize logging: {error}");
+        eprintln!("VKey-rs: failed to initialize logging: {error}");
         return ExitCode::FAILURE;
     }
 
     match run(options) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("openkey-rs: {error}");
+            eprintln!("VKey-rs: {error}");
             ExitCode::FAILURE
         }
     }
@@ -84,22 +84,14 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
         info!("Running in headless mode (daemon only)...");
         let (_tx, _rx) = mpsc::channel();
         let (_gui_tx, _gui_rx) = mpsc::channel();
-        // Run in main thread directly
-        run_daemon(config, _rx, _gui_tx)?;
+        // Run in main thread directly with a dummy context
+        run_daemon(config, _rx, _gui_tx, egui::Context::default())?;
         Ok(())
     } else {
         info!("Starting GUI settings application and background daemon...");
 
         let (tx, rx) = mpsc::channel();
         let (gui_tx, gui_rx) = mpsc::channel();
-
-        // Spawn background keyboard daemon thread
-        let daemon_config = config.clone();
-        std::thread::spawn(move || {
-            if let Err(error) = run_daemon(daemon_config, rx, gui_tx) {
-                error!("Daemon background thread error: {}", error);
-            }
-        });
 
         // Run egui settings panel in the main thread
         let native_options = eframe::NativeOptions {
@@ -114,9 +106,9 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
         eframe::run_native(
             "VKey Settings",
             native_options,
-            Box::new(|cc| {
-                let ctx = &cc.egui_ctx;
-                gui::setup_custom_fonts(ctx);
+            Box::new(move |cc| {
+                let ctx = cc.egui_ctx.clone();
+                gui::setup_custom_fonts(&ctx);
 
                 let mut visual = egui::Visuals::light();
                 visual.window_fill = egui::Color32::from_rgb(245, 247, 250);
@@ -124,12 +116,16 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                 visual.override_text_color = Some(egui::Color32::BLACK);
                 ctx.set_visuals(visual);
 
-                Ok(Box::new(gui::AppGui::new(
-                    config,
-                    tx,
-                    gui_rx,
-                    cc.egui_ctx.clone(),
-                )))
+                // Spawn background keyboard daemon thread inside the main loop closure
+                let daemon_config = config.clone();
+                let ctx_clone = ctx.clone();
+                std::thread::spawn(move || {
+                    if let Err(error) = run_daemon(daemon_config, rx, gui_tx, ctx_clone) {
+                        error!("Daemon background thread error: {}", error);
+                    }
+                });
+
+                Ok(Box::new(gui::AppGui::new(config, tx, gui_rx, ctx)))
             }),
         )
         .map_err(|e| e.to_string().into())
@@ -140,6 +136,7 @@ fn run_daemon(
     initial_config: EngineConfig,
     rx: Receiver<AppMessage>,
     gui_tx: Sender<GuiMessage>,
+    ctx: egui::Context,
 ) -> keyboard_linux::Result<()> {
     let mut config = initial_config;
     let mut engine = InputEngine::new(config.clone());
@@ -221,6 +218,9 @@ fn run_daemon(
 
             // Send notification back to GUI thread to redraw tray icon
             let _ = gui_tx.send(GuiMessage::StateChanged(config.clone()));
+
+            // Wake up GUI thread immediately
+            ctx.request_repaint_of(egui::ViewportId::ROOT);
         }
 
         let action = engine.process_key(event);
@@ -252,8 +252,8 @@ fn parse_options() -> Result<Option<Options>, String> {
             "--headless" => options.headless = true,
             "-h" | "--help" => {
                 println!(
-                    "openkey-rs Phase 5\n\n\
-                     Usage: openkey-rs [--debug-input] [--telex|--vni] [--disabled] [--headless]\n\n\
+                    "VKey-rs Phase 5\n\n\
+                     Usage: VKey-rs [--debug-input] [--telex|--vni] [--disabled] [--headless]\n\n\
                      Runs the background X11 input loop and native egui settings dashboard."
                 );
                 return Ok(None);

@@ -5,7 +5,7 @@ use vietnamese_core::EngineConfig;
 
 fn get_config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|mut p| {
-        p.push("openkey-rs");
+        p.push("VKey-rs");
         p.push("config.toml");
         p
     })

@@ -2879,7 +2879,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
-name = "openkey-core-test"
+name = "VKey-core-test"
 version = "0.1.0"
 dependencies = [
  "unicode-segmentation",
@@ -2887,7 +2887,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "openkey-rs"
+name = "VKey-rs"
 version = "0.1.0"
 dependencies = [
  "dirs 5.0.1",

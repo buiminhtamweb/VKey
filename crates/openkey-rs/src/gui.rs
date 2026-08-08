@@ -201,7 +201,7 @@ impl AppGui {
                         // 3. Update shared lock
                         *shared_config_clone.lock().unwrap() = cfg.clone();
 
-                        ctx_clone.request_repaint();
+                        ctx_clone.request_repaint_of(egui::ViewportId::ROOT);
                     }
                 }
             }
@@ -606,32 +606,34 @@ impl eframe::App for AppGui {
 #[cfg(target_os = "windows")]
 fn set_startup(enabled: bool) {
     if let Ok(exe_path) = std::env::current_exe() {
-        let exe_str = exe_path.to_string_lossy();
-        if enabled {
-            let _ = std::process::Command::new("reg")
-                .args([
-                    "add",
-                    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-                    "/v",
-                    "VKey",
-                    "/t",
-                    "REG_SZ",
-                    "/d",
-                    &format!("\"{}\"", exe_str),
-                    "/f",
-                ])
-                .output();
-        } else {
-            let _ = std::process::Command::new("reg")
-                .args([
-                    "delete",
-                    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-                    "/v",
-                    "VKey",
-                    "/f",
-                ])
-                .output();
-        }
+        let exe_str = exe_path.to_string_lossy().into_owned();
+        std::thread::spawn(move || {
+            if enabled {
+                let _ = std::process::Command::new("reg")
+                    .args([
+                        "add",
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                        "/v",
+                        "VKey",
+                        "/t",
+                        "REG_SZ",
+                        "/d",
+                        &format!("\"{}\"", exe_str),
+                        "/f",
+                    ])
+                    .output();
+            } else {
+                let _ = std::process::Command::new("reg")
+                    .args([
+                        "delete",
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                        "/v",
+                        "VKey",
+                        "/f",
+                    ])
+                    .output();
+            }
+        });
     }
 }
 
