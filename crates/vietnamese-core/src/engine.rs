@@ -1,0 +1,134 @@
+use unicode_segmentation::UnicodeSegmentation;
+
+use crate::{
+    composition::CompositionBuffer,
+    config::{EngineConfig, InputMethod},
+    key::{Key, KeyEvent},
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EngineAction {
+    Consume,
+    PassThrough,
+    Commit(String),
+    Replace { backspaces: usize, text: String },
+}
+
+pub struct InputEngine {
+    config: EngineConfig,
+    composition: CompositionBuffer,
+}
+
+impl InputEngine {
+    pub fn new(config: EngineConfig) -> Self {
+        Self {
+            config,
+            composition: CompositionBuffer::default(),
+        }
+    }
+
+    pub fn process_key(&mut self, event: KeyEvent) -> EngineAction {
+        if !event.pressed {
+            return EngineAction::PassThrough;
+        }
+        if !self.config.enabled
+            || event.modifiers.ctrl
+            || event.modifiers.alt
+            || event.modifiers.super_key
+        {
+            self.reset();
+            return EngineAction::PassThrough;
+        }
+
+        match event.key {
+            Key::Character(character) if is_delimiter(character, self.config.input_method) => {
+                self.reset();
+                EngineAction::PassThrough
+            }
+            Key::Character(character)
+                if self.config.restore_typing
+                    && character.eq_ignore_ascii_case(&self.config.restore_key)
+                    && self.composition.can_restore() =>
+            {
+                let old = self.composition.rendered().to_owned();
+                self.composition.restore();
+                replacement(&old, self.composition.rendered())
+            }
+            Key::Character(character) => {
+                let old = self.composition.rendered().to_owned();
+                self.composition
+                    .push(character, self.config.input_method, self.config.smart_tone);
+                let new = self.composition.rendered();
+                if new.strip_prefix(&old) == Some(character.encode_utf8(&mut [0; 4])) {
+                    EngineAction::PassThrough
+                } else {
+                    replacement(&old, new)
+                }
+            }
+            Key::Backspace if !self.composition.is_empty() => {
+                let old = self.composition.rendered().to_owned();
+                self.composition.backspace();
+                replacement(&old, self.composition.rendered())
+            }
+            _ => {
+                self.reset();
+                EngineAction::PassThrough
+            }
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.composition.clear();
+    }
+
+    pub fn current_text(&self) -> &str {
+        self.composition.rendered()
+    }
+
+    pub fn config(&self) -> &EngineConfig {
+        &self.config
+    }
+
+    pub fn set_config(&mut self, config: EngineConfig) {
+        self.config = config;
+        self.reset();
+    }
+
+    pub fn set_input_method(&mut self, input_method: InputMethod) {
+        self.config.input_method = input_method;
+        self.reset();
+    }
+}
+
+fn is_delimiter(character: char, method: InputMethod) -> bool {
+    if character.is_alphabetic() {
+        return false;
+    }
+    method != InputMethod::Vni || !matches!(character, '1'..='9')
+}
+
+fn replacement(old: &str, new: &str) -> EngineAction {
+    let mut old_iter = old.grapheme_indices(true).peekable();
+    let mut new_iter = new.grapheme_indices(true).peekable();
+    let mut new_suffix_byte = 0;
+
+    while let (Some((_, old_grapheme)), Some((new_index, new_grapheme))) =
+        (old_iter.peek().copied(), new_iter.peek().copied())
+    {
+        if old_grapheme != new_grapheme {
+            new_suffix_byte = new_index;
+            break;
+        }
+        old_iter.next();
+        new_iter.next();
+        new_suffix_byte = new_index + new_grapheme.len();
+    }
+
+    let backspaces = old_iter.count();
+    let text = new[new_suffix_byte..].to_owned();
+    if backspaces == 0 && text.is_empty() {
+        EngineAction::Consume
+    } else {
+        EngineAction::Replace { backspaces, text }
+    }
+}

@@ -1,0 +1,8 @@
+enabled = true
+input_method = "telex"
+smart_tone = true
+restore_typing = true
+restore_key = "z"
+auto_start = true
+backend = "auto"
+

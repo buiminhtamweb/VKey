@@ -1,0 +1,18 @@
+[workspace]
+members = [
+    "crates/vietnamese-core",
+    "crates/core-test",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.85"
+
+[workspace.dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+unicode-normalization = "0.1.25"
+unicode-segmentation = "1.13.3"
+
