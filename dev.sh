@@ -1,115 +1,84 @@
 #!/usr/bin/env bash
+set -Eeuo pipefail
 
-# Exit immediately if a command exits with a non-zero status
-set -e
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+cd "$SCRIPT_DIR"
 
-# ANSI color codes
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+info() { printf '\033[0;34m[dev]\033[0m %s\n' "$*"; }
+warn() { printf '\033[0;33m[warn]\033[0m %s\n' "$*"; }
+die() { printf '\033[0;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 
-# Logging helpers
-info() { echo -e "${BLUE}[INFO]${NC} $*"; }
-success() { echo -e "${GREEN}[SUCCESS]${NC} $*"; }
-warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
-error() { echo -e "${RED}[ERROR]${NC} $*"; }
+usage() {
+    cat <<'EOF'
+Usage: bash dev.sh [COMMAND] [ARGS...]
 
-show_help() {
-    echo "Usage: ./dev.sh [COMMAND] [ARGS...]"
-    echo ""
-    echo "Development helper script for VKey-rs."
-    echo ""
-    echo "Commands:"
-    echo "  run [args]     Run VKey-rs with debug-input and optional arguments (default)"
-    echo "  test           Run all tests in the workspace"
-    echo "  check          Run cargo check, format, and clippy checks"
-    echo "  kbd-debug      Run X11 raw keyboard decoder debug binary"
-    echo "  core-debug     Run X11 to Vietnamese engine composition observer"
-    echo "  test-cli       Run Vietnamese core CLI with manual input (e.g. ./dev.sh test-cli \"tieengs\")"
-    echo "  help           Show this help message"
-    echo ""
-    echo "If no command is provided, it defaults to: run --debug-input"
+Commands:
+  run [args]       Run the GUI + keyboard service (default: --debug-input)
+  headless [args]  Run only the keyboard service
+  core [args]      Run VKey-core-test, e.g. bash dev.sh core "tieengs Vieejt"
+  kbd-debug        Run the platform keyboard-event diagnostic
+  core-debug       Run keyboard -> Vietnamese core diagnostics
+  test [args]      Run workspace tests
+  check            Run fmt, check, and Clippy
+  all              Run the complete local validation suite and debug build
+  package [args]   Delegate to build.sh, e.g. bash dev.sh package --quick
+  help             Show this help
+EOF
 }
 
-# Detect Operating System
-OS_TYPE=$(uname -s)
-case "$OS_TYPE" in
-    Linux*)     OS_NAME="linux";;
-    Darwin*)    OS_NAME="macos";;
-    CYGWIN*|MINGW*|MSYS*|Windows_NT*) OS_NAME="windows";;
-    *)          OS_NAME="unknown";;
-esac
+command -v cargo >/dev/null 2>&1 || die "Cargo is not available in PATH"
 
-CMD=${1:-run}
-if [ $# -gt 0 ]; then
-    shift
-fi
+COMMAND="${1:-run}"
+if (($#)); then shift; fi
 
-case "$CMD" in
+case "$COMMAND" in
     run)
-        # Default flags for development run if no arguments are provided
-        ARGS=("$@")
-        if [ ${#ARGS[@]} -eq 0 ]; then
-            ARGS=("--debug-input")
-        fi
-        
-        info "Running on OS: ${OS_NAME}"
-        if [ "$OS_NAME" != "linux" ]; then
-            warn "You are running on a non-Linux platform (${OS_NAME})."
-            warn "The daemon will run using the interactive mock stdin keyboard backend."
-        fi
-        
-        info "Starting VKey-rs daemon (debug profile) with args: ${ARGS[*]}..."
-        export RUST_BACKTRACE=1
-        export RUST_LOG=debug
-        exec cargo run -p VKey-rs -- "${ARGS[@]}"
+        args=("$@")
+        ((${#args[@]})) || args=(--debug-input)
+        export RUST_BACKTRACE="${RUST_BACKTRACE:-1}"
+        export RUST_LOG="${RUST_LOG:-debug}"
+        info "Starting VKey-rs ${args[*]}"
+        exec cargo run -p VKey-rs -- "${args[@]}"
         ;;
-    test)
-        info "Running workspace tests..."
-        exec cargo test --workspace "$@"
+    headless)
+        export RUST_BACKTRACE="${RUST_BACKTRACE:-1}"
+        export RUST_LOG="${RUST_LOG:-debug}"
+        info "Starting VKey-rs in headless mode"
+        exec cargo run -p VKey-rs -- --headless "$@"
         ;;
-    check)
-        info "Formatting check..."
-        cargo fmt --all -- --check
-        info "Clippy lints..."
-        cargo clippy --workspace --all-targets --all-features -- -D warnings
-        info "Type check..."
-        cargo check --workspace
-        success "Checks finished successfully!"
+    core|test-cli)
+        info "Running the platform-independent Vietnamese core CLI"
+        exec cargo run -p VKey-core-test -- "$@"
         ;;
     kbd-debug)
-        info "Running on OS: ${OS_NAME}"
-        if [ "$OS_NAME" != "linux" ]; then
-            warn "You are running on a non-Linux platform (${OS_NAME})."
-            warn "keyboard-debug will run using mock stdin input."
-        fi
-        info "Starting keyboard-debug..."
-        export RUST_LOG=debug
+        export RUST_LOG="${RUST_LOG:-debug}"
         exec cargo run -p keyboard-debug -- "$@"
         ;;
     core-debug)
-        info "Running on OS: ${OS_NAME}"
-        if [ "$OS_NAME" != "linux" ]; then
-            warn "You are running on a non-Linux platform (${OS_NAME})."
-            warn "keyboard-core-debug will run using mock stdin input."
-        fi
-        info "Starting keyboard-core-debug..."
-        export RUST_LOG=debug
+        export RUST_LOG="${RUST_LOG:-debug}"
         exec cargo run -p keyboard-core-debug -- "$@"
         ;;
-    test-cli)
-        info "Starting VKey-core-test CLI..."
-        exec cargo run -p VKey-core-test -- "$@"
+    test)
+        exec cargo test --workspace --all-features --locked "$@"
+        ;;
+    check)
+        cargo fmt --all -- --check
+        cargo check --workspace --all-targets --all-features --locked
+        cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+        ;;
+    all)
+        bash "$0" check
+        cargo test --workspace --all-features --locked
+        cargo build --workspace --locked
+        ;;
+    package)
+        exec bash "$SCRIPT_DIR/build.sh" "$@"
         ;;
     help|-h|--help)
-        show_help
-        exit 0
+        usage
         ;;
     *)
-        error "Unknown command: $CMD"
-        show_help
-        exit 1
+        usage >&2
+        die "Unknown command: $COMMAND"
         ;;
 esac

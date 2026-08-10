@@ -4,20 +4,17 @@ Vkey-rs is a native Vietnamese input method written in Rust. It does not use
 Fcitx5, IBus, Electron, an external keyboard command, or the clipboard as its
 primary input path.
 
-The repository currently completes:
-
-- **Phase 1:** platform-independent Vietnamese core and test CLI.
-- **Phase 2:** native X11 keyboard observation and debug integration.
-
-Text injection, daemon IPC, egui settings, packaging, and Wayland support are
-not implemented yet.
+The repository currently includes the platform-independent Vietnamese core,
+native Windows keyboard hook/injection, the experimental X11 capture/injection
+path, and an egui settings application. Wayland global input, daemon IPC, and
+distribution-native `.deb`/`.rpm` packaging are not implemented yet.
 
 ## Architecture
 
 ```text
-                    X11 Server
+              Windows hook / X11 server
                         |
-                        | XI_RawKeyPress / XI_RawKeyRelease
+                        | KeyEvent
                         v
               +-----------------------+
               | X11KeyboardBackend    |
@@ -35,8 +32,7 @@ not implemented yet.
                     EngineAction
                           |
                           v
-                 Phase 3 Injector
-                    (not present)
+              Windows SendInput / XTEST
 ```
 
 `vietnamese-core` remains independent of X11, Linux, devices, and GUI types.
@@ -45,11 +41,14 @@ Vietnamese spelling rules.
 
 ## X11 architecture decision
 
-Phase 2 selects `XI_RawKeyPress` and `XI_RawKeyRelease` from XInput2 on the
-screen's root window. It does not use `XGrabKeyboard`:
+The current experimental X11 runtime selects `XI_RawKeyPress` and
+`XI_RawKeyRelease` from XInput2 on the screen's root window. It does not use a
+whole-keyboard `XGrabKeyboard`:
 
 - Raw events are global and independent of the focused client.
-- Selection is observational and never freezes, consumes, or reroutes input.
+- Raw selection is observational and does not consume the original key. The
+  integration layer therefore repairs the text already observed in the target
+  when applying an `EngineAction`.
 - The blocking `wait_for_event()` path has no busy loop and needs no event
   thread.
 - Closing the X11 connection automatically removes the subscription. `stop()`
@@ -64,11 +63,12 @@ the X server's active XKB keymap and state, resolves layout/group/Shift/Caps
 Lock, then produces the keysym used by the platform-neutral decoder. Keycodes
 are never hard-coded as ASCII.
 
-Important: raw events are observation-only. The Phase 2
-`KeyboardDecision::{PassThrough, Consume}` mapping describes the decision
-boundary, but is not applied to the X server. Phase 3 will require a separate,
-carefully scoped interception/injection mechanism; this backend does not
-pretend raw event selection can consume keys.
+Unicode output uses XTEST with a temporary unused X11 keycode mapping; the
+mapping is restored with an RAII guard. XTEST accepts physical keycodes rather
+than UTF-8 strings, and clients must process `MappingNotify`/XKB map updates.
+Consequently this path remains experimental and must be tested with each X11
+toolkit. It is not Wayland support and is not claimed to be equivalent to an
+XIM/IBus/Fcitx commit-string protocol.
 
 References: [XInput2 selection](https://xorg.freedesktop.org/archive/X11R7.5/doc/man/man3/XISelectEvents.3.html),
 [XInput protocol](https://www.x.org/docs/Xi/proto.pdf),
@@ -126,17 +126,40 @@ XInput2 2.0 or newer and XKB. Root access is neither needed nor supported.
 
 ## Build
 
+The repository scripts always start from the repository directory, so they can
+be called from any current working directory. On Windows, run them from Git
+Bash; on Linux/macOS, use a normal Bash shell.
+
 ```bash
-cargo build --workspace
-cargo build --workspace --release
+# Full validation + release archive in target/dist/
+bash build.sh
+
+# Fast release archive without fmt/clippy/tests
+bash build.sh --quick
+
+# Validation only, or build binaries without packaging
+bash build.sh --check-only
+bash build.sh --no-package
 ```
 
-Phase 2 release binaries are:
+The package contains:
 
 ```text
+VKey-rs
 VKey-core-test
 keyboard-debug
 keyboard-core-debug
+```
+
+Useful development shortcuts:
+
+```bash
+bash dev.sh run                    # GUI + keyboard service, debug input enabled
+bash dev.sh headless               # keyboard service only
+bash dev.sh core "buif"            # prints: bùi
+bash dev.sh check                  # fmt + check + Clippy
+bash dev.sh all                    # complete validation + debug build
+bash dev.sh package --quick        # fast release package
 ```
 
 ## Run

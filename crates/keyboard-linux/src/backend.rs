@@ -35,6 +35,8 @@ pub enum KeyboardError {
     ConnectionLost(String),
     #[error("timeout waiting for next event")]
     Timeout,
+    #[error("text injection failed: {0}")]
+    TextInjection(String),
 }
 
 pub trait KeyboardBackend {

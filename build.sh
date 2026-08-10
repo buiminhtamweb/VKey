@@ -1,172 +1,131 @@
 #!/usr/bin/env bash
+set -Eeuo pipefail
 
-# Exit immediately if a command exits with a non-zero status
-set -eo pipefail
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+cd "$SCRIPT_DIR"
 
-# ANSI color codes
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+info() { printf '\033[0;34m[build]\033[0m %s\n' "$*"; }
+ok() { printf '\033[0;32m[done]\033[0m %s\n' "$*"; }
+warn() { printf '\033[0;33m[warn]\033[0m %s\n' "$*"; }
+die() { printf '\033[0;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
+trap 'die "Command failed at line $LINENO"' ERR
 
-# Logging helpers
-info() { echo -e "${BLUE}[INFO]${NC} $*"; }
-success() { echo -e "${GREEN}[SUCCESS]${NC} $*"; }
-warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
-error() { echo -e "${RED}[ERROR]${NC} $*"; }
+usage() {
+    cat <<'EOF'
+Usage: bash build.sh [OPTIONS]
 
-# Display help message
-show_help() {
-    echo "Usage: ./build.sh [OPTIONS]"
-    echo ""
-    echo "Builds and packages the VKey-rs workspace."
-    echo ""
-    echo "Options:"
-    echo "  --no-check    Skip quality checks (cargo fmt, cargo clippy, cargo test)"
-    echo "  -h, --help    Show this help message"
+Build, verify, and package VKey-rs.
+
+Options:
+  --quick         Skip fmt, clippy, and tests; build/package release directly
+  --no-check      Alias for --quick
+  --no-package    Build release binaries without creating an archive
+  --check-only    Run the complete validation suite without building a package
+  -h, --help      Show this help
+
+Artifacts are written to target/dist/.
+EOF
 }
 
-# Parse command line options
 RUN_CHECKS=true
-for arg in "$@"; do
-    case "$arg" in
-        --no-check)
-            RUN_CHECKS=false
-            shift
-            ;;
-        -h|--help)
-            show_help
-            exit 0
-            ;;
-        *)
-            error "Unknown argument: $arg"
-            show_help
-            exit 1
-            ;;
+RUN_BUILD=true
+RUN_PACKAGE=true
+while (($#)); do
+    case "$1" in
+        --quick|--no-check) RUN_CHECKS=false ;;
+        --no-package) RUN_PACKAGE=false ;;
+        --check-only) RUN_BUILD=false; RUN_PACKAGE=false ;;
+        -h|--help) usage; exit 0 ;;
+        *) die "Unknown option: $1" ;;
     esac
+    shift
 done
 
-info "Starting build process..."
+command -v cargo >/dev/null 2>&1 || die "Cargo is not available in PATH"
 
-# 1. Check requirements
-if ! command -v cargo &> /dev/null; then
-    error "Cargo is not installed or not in PATH."
-    exit 1
-fi
+VERSION="$({
+    awk '
+        /^\[workspace\.package\]$/ { in_package=1; next }
+        /^\[/ { in_package=0 }
+        in_package && /^version[[:space:]]*=/ {
+            gsub(/^[^"]*"|".*$/, "", $0); print; exit
+        }
+    ' Cargo.toml
+} || true)"
+[[ -n "$VERSION" ]] || die "Cannot read workspace version from Cargo.toml"
 
-# 2. Extract version from Cargo.toml
-info "Extracting project version..."
-VERSION=$(grep -A 5 "\[workspace.package\]" Cargo.toml 2>/dev/null | grep "^version =" | cut -d '"' -f2 || true)
-if [ -z "$VERSION" ]; then
-    VERSION="0.1.0"
-    warn "Could not extract version from Cargo.toml. Defaulting to $VERSION"
-else
-    info "Found project version: $VERSION"
-fi
-
-# 3. Quality Checks (Formatter, Linter, Tests)
-if [ "$RUN_CHECKS" = true ]; then
-    info "Running code quality checks..."
-    
-    info "Checking formatting (cargo fmt)..."
-    cargo fmt --all -- --check
-    
-    info "Running linter (cargo clippy)..."
-    cargo clippy --workspace --all-targets --all-features -- -D warnings
-    
-    info "Running tests (cargo test)..."
-    cargo test --workspace
-    
-    success "All checks passed!"
-else
-    warn "Skipping quality checks as requested."
-fi
-
-# 4. Compile in Release Mode
-info "Compiling release binaries..."
-cargo build --workspace --release
-
-# 5. OS Detection & Packaging
-OS_TYPE=$(uname -s)
-case "$OS_TYPE" in
-    Linux*)
-        OS_NAME="linux"
-        BIN_EXT=""
-        ARCHIVE_EXT="tar.gz"
-        ;;
-    Darwin*)
-        OS_NAME="macos"
-        BIN_EXT=""
-        ARCHIVE_EXT="tar.gz"
-        ;;
-    CYGWIN*|MINGW*|MSYS*|Windows_NT*)
-        OS_NAME="windows"
-        BIN_EXT=".exe"
-        ARCHIVE_EXT="zip"
-        ;;
-    *)
-        OS_NAME="unknown"
-        BIN_EXT=""
-        ARCHIVE_EXT="tar.gz"
-        ;;
+case "$(uname -s 2>/dev/null || printf unknown)" in
+    Linux*) OS_NAME=linux; BIN_EXT= ;;
+    Darwin*) OS_NAME=macos; BIN_EXT= ;;
+    CYGWIN*|MINGW*|MSYS*|Windows_NT*) OS_NAME=windows; BIN_EXT=.exe ;;
+    *) OS_NAME=unknown; BIN_EXT= ;;
 esac
 
-info "Detected operating system: ${OS_NAME} (Binary suffix: '${BIN_EXT}')"
+if [[ "$RUN_CHECKS" == true ]]; then
+    info "Checking formatting"
+    cargo fmt --all -- --check
+    info "Checking workspace types"
+    cargo check --workspace --all-targets --all-features --locked
+    info "Running Clippy with warnings denied"
+    cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+    info "Running workspace tests"
+    cargo test --workspace --all-features --locked
+    ok "Validation suite passed"
+fi
 
-DIST_DIR="target/dist"
-PKG_NAME="VKey-rs-${VERSION}-${OS_NAME}"
-PKG_DIR="${DIST_DIR}/${PKG_NAME}"
+if [[ "$RUN_BUILD" != true ]]; then
+    exit 0
+fi
 
-info "Creating package directory in ${PKG_DIR}..."
-rm -rf "${DIST_DIR}"
-mkdir -p "${PKG_DIR}/bin"
-mkdir -p "${PKG_DIR}/config"
+info "Building release workspace"
+cargo build --workspace --release --locked
 
-# Copy binary helper using detected BIN_EXT
-copy_binary() {
-    local bin_name=$1
-    local dest=$2
-    local src_path="target/release/${bin_name}${BIN_EXT}"
-    if [ -f "$src_path" ]; then
-        cp "$src_path" "$dest"
+if [[ "$RUN_PACKAGE" != true ]]; then
+    ok "Release binaries are in target/release/"
+    exit 0
+fi
+
+DIST_DIR="$SCRIPT_DIR/target/dist"
+EXPECTED_DIST="$SCRIPT_DIR/target/dist"
+[[ "$DIST_DIR" == "$EXPECTED_DIST" ]] || die "Refusing to replace unexpected path: $DIST_DIR"
+
+PACKAGE_NAME="VKey-rs-${VERSION}-${OS_NAME}"
+PACKAGE_DIR="$DIST_DIR/$PACKAGE_NAME"
+rm -rf -- "$DIST_DIR"
+mkdir -p -- "$PACKAGE_DIR/bin" "$PACKAGE_DIR/config"
+
+BINARIES=(VKey-rs VKey-core-test keyboard-debug keyboard-core-debug)
+for binary in "${BINARIES[@]}"; do
+    source_path="$SCRIPT_DIR/target/release/${binary}${BIN_EXT}"
+    [[ -f "$source_path" ]] || die "Missing release binary: $source_path"
+    cp -- "$source_path" "$PACKAGE_DIR/bin/"
+done
+
+cp -- README.md "$PACKAGE_DIR/"
+cp -R -- config/. "$PACKAGE_DIR/config/"
+for asset in vkey_icon_*.png vkey_logo_*.png; do
+    [[ -f "$asset" ]] && cp -- "$asset" "$PACKAGE_DIR/"
+done
+
+(
+    cd "$PACKAGE_DIR"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum bin/* > SHA256SUMS
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 bin/* > SHA256SUMS
     else
-        error "Binary ${bin_name}${BIN_EXT} not found in target/release/"
-        exit 1
+        warn "sha256sum/shasum not found; SHA256SUMS was not generated"
     fi
-}
+)
 
-# Copy binaries
-info "Copying binaries..."
-copy_binary "VKey-rs" "${PKG_DIR}/bin/"
-copy_binary "keyboard-debug" "${PKG_DIR}/bin/"
-copy_binary "keyboard-core-debug" "${PKG_DIR}/bin/"
-copy_binary "VKey-core-test" "${PKG_DIR}/bin/"
-
-# Copy other assets
-info "Copying configuration and documents..."
-if [ -d "config" ]; then
-    cp -r config/* "${PKG_DIR}/config/"
-fi
-if [ -f "README.md" ]; then
-    cp README.md "${PKG_DIR}/"
-fi
-
-# Create archive
-if [ "$OS_NAME" = "windows" ] && command -v zip &> /dev/null; then
-    ARCHIVE_PATH="${DIST_DIR}/${PKG_NAME}.zip"
-    info "Compressing into ${ARCHIVE_PATH}..."
-    (cd target/dist && zip -r "${PKG_NAME}.zip" "${PKG_NAME}")
-    success "Packaging complete! Release archive created successfully at: ${ARCHIVE_PATH}"
-elif command -v tar &> /dev/null; then
-    ARCHIVE_PATH="${DIST_DIR}/${PKG_NAME}.${ARCHIVE_EXT}"
-    info "Compressing into ${ARCHIVE_PATH}..."
-    (cd target/dist && tar -czf "${PKG_NAME}.${ARCHIVE_EXT}" "${PKG_NAME}")
-    success "Packaging complete!"
-    info "Package contents:"
-    tar -tf "${ARCHIVE_PATH}" | sed 's/^/  /'
-    echo ""
-    success "Release archive created successfully at: ${ARCHIVE_PATH}"
+if [[ "$OS_NAME" == windows ]] && command -v zip >/dev/null 2>&1; then
+    ARCHIVE_PATH="$DIST_DIR/${PACKAGE_NAME}.zip"
+    (cd "$DIST_DIR" && zip -q -r "$(basename "$ARCHIVE_PATH")" "$PACKAGE_NAME")
 else
-    warn "Neither zip nor tar is available. Compiled files are placed in: ${PKG_DIR}"
+    ARCHIVE_PATH="$DIST_DIR/${PACKAGE_NAME}.tar.gz"
+    command -v tar >/dev/null 2>&1 || die "tar is required to create $ARCHIVE_PATH"
+    (cd "$DIST_DIR" && tar -czf "$(basename "$ARCHIVE_PATH")" "$PACKAGE_NAME")
 fi
+
+ok "Package directory: $PACKAGE_DIR"
+ok "Release archive: $ARCHIVE_PATH"

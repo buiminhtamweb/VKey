@@ -9,10 +9,9 @@ use std::{env, process::ExitCode};
 
 #[cfg(not(target_os = "linux"))]
 use keyboard_linux::execute_engine_action;
-use keyboard_linux::{
-    KeyboardBackend, KeyboardDecision, X11KeyboardBackend, decision_for,
-    execute_observed_engine_action,
-};
+#[cfg(target_os = "linux")]
+use keyboard_linux::execute_observed_engine_action;
+use keyboard_linux::{KeyboardBackend, KeyboardDecision, X11KeyboardBackend, decision_for};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 use vietnamese_core::{EngineConfig, InputEngine, InputMethod};

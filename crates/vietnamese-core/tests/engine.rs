@@ -101,6 +101,11 @@ fn required_sentence() {
 }
 
 #[test]
+fn regression_buif_is_bui_with_grave_tone() {
+    assert_eq!(type_text("buif"), "bùi");
+}
+
+#[test]
 fn vni_shapes_and_tones() {
     for (input, expected) in [
         ("tie6ng1", "tiếng"),

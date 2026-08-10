@@ -32,9 +32,6 @@ pub fn execute_engine_action(
         } => {
             if *delete_graphemes > 0 {
                 injector.delete_previous_graphemes(*delete_graphemes)?;
-                if !text.is_empty() {
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                }
             }
             if text.is_empty() {
                 Ok(())
@@ -67,9 +64,6 @@ pub fn execute_observed_engine_action(
                 observed_inserted_graphemes.saturating_sub(observed_deleted_graphemes);
             if total_delete > 0 {
                 injector.delete_previous_graphemes(total_delete)?;
-                if !text.is_empty() {
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                }
             }
             if text.is_empty() {
                 Ok(())
@@ -85,9 +79,6 @@ pub fn execute_observed_engine_action(
                 .saturating_sub(observed_deleted_graphemes);
             if total_delete > 0 {
                 injector.delete_previous_graphemes(total_delete)?;
-                if !text.is_empty() {
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                }
             }
             if text.is_empty() {
                 Ok(())
@@ -197,6 +188,17 @@ mod tests {
             action,
             MockAction::Delete(count) if *count > 1
         )));
+    }
+
+    #[test]
+    fn windows_regression_buif_deletes_ui_before_inserting_ui_with_tone() {
+        let injector = type_through_pipeline("buif", EngineConfig::default());
+
+        assert_eq!(injector.text, "bùi");
+        assert_eq!(
+            injector.actions,
+            vec![MockAction::Delete(2), MockAction::Insert("ùi".to_owned())]
+        );
     }
 
     #[test]

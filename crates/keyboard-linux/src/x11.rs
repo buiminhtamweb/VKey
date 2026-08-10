@@ -2,7 +2,7 @@ use vietnamese_core::Key;
 use xkeysym::{Keysym, key};
 
 #[cfg(not(target_os = "linux"))]
-use crate::{KeyboardBackend, KeyboardDecision, Result, WindowId};
+use crate::{KeyboardBackend, KeyboardDecision, KeyboardError, Result, WindowId};
 
 #[allow(dead_code)]
 fn key_from_keysym(raw_keysym: u32) -> Key {
@@ -1275,7 +1275,7 @@ unsafe fn get_modifiers() -> vietnamese_core::Modifiers {
 #[cfg(target_os = "windows")]
 unsafe fn inject_unicode_text(text: &str) -> Result<()> {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, SendInput,
+        INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
     };
 
     let mut inputs = Vec::new();
@@ -1306,22 +1306,13 @@ unsafe fn inject_unicode_text(text: &str) -> Result<()> {
         });
     }
 
-    if !inputs.is_empty() {
-        unsafe {
-            SendInput(
-                inputs.len() as u32,
-                inputs.as_ptr(),
-                std::mem::size_of::<INPUT>() as i32,
-            );
-        }
-    }
-    Ok(())
+    unsafe { send_input_batch(&inputs) }
 }
 
 #[cfg(target_os = "windows")]
 unsafe fn inject_backspaces(count: usize) -> Result<()> {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VK_BACK,
+        INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_BACK,
     };
 
     let mut inputs = Vec::new();
@@ -1352,16 +1343,37 @@ unsafe fn inject_backspaces(count: usize) -> Result<()> {
         });
     }
 
-    if !inputs.is_empty() {
-        unsafe {
-            SendInput(
-                inputs.len() as u32,
-                inputs.as_ptr(),
-                std::mem::size_of::<INPUT>() as i32,
-            );
-        }
+    unsafe { send_input_batch(&inputs) }
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn send_input_batch(
+    inputs: &[windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT],
+) -> Result<()> {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{INPUT, SendInput};
+
+    if inputs.is_empty() {
+        return Ok(());
     }
-    Ok(())
+
+    let expected = u32::try_from(inputs.len()).map_err(|_| {
+        KeyboardError::TextInjection("too many Windows INPUT records in one batch".to_owned())
+    })?;
+    let inserted = unsafe {
+        SendInput(
+            expected,
+            inputs.as_ptr(),
+            std::mem::size_of::<INPUT>() as i32,
+        )
+    };
+    if inserted == expected {
+        Ok(())
+    } else {
+        Err(KeyboardError::TextInjection(format!(
+            "Windows SendInput accepted {inserted}/{expected} records ({})",
+            std::io::Error::last_os_error()
+        )))
+    }
 }
 
 #[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
