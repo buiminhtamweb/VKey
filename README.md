@@ -105,6 +105,22 @@ sudo apt install build-essential pkg-config libxcb1-dev \
   libxkbcommon-dev libxkbcommon-x11-dev
 ```
 
+Additional Ubuntu/Debian packages for the GUI/tray binary (`VKey-rs`):
+
+```bash
+sudo apt install libglib2.0-dev libgtk-3-dev \
+  libayatana-appindicator3-dev libxdo-dev
+```
+
+On Linux Mint/Ubuntu, the helper scripts can check and install the complete
+native dependency set:
+
+```bash
+./build-linux.sh --check-deps-only
+./build-linux.sh --install-deps --no-check
+./dev-linux.sh run
+```
+
 At runtime, `$DISPLAY` must point to a reachable X server that supports
 XInput2 2.0 or newer and XKB. Root access is neither needed nor supported.
 
@@ -232,6 +248,14 @@ original keys because Phase 2 does not consume or inject.
 
 ## Error handling and troubleshooting
 
+- `rust-lld: error: unable to find library -lxkbcommon-x11`: install the XKB
+  X11 development package:
+  `sudo apt install libxkbcommon-x11-dev`. The runtime library
+  `libxkbcommon-x11.so.0` is not enough; the linker also needs the unversioned
+  development symlink and pkg-config metadata from the `-dev` package.
+- `rust-lld: error: unable to find library -lxdo`: install the xdotool
+  development package: `sudo apt install libxdo-dev`. The `xdotool` runtime
+  package alone is not enough for linking the GUI/tray binary.
 - `DISPLAY is not set`: run inside an X11 session and check `$DISPLAY`.
 - `failed to connect to X11 display`: verify X authority and that the display
   is reachable.

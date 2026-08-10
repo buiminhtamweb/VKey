@@ -7,8 +7,11 @@ use eframe::egui;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::{env, process::ExitCode};
 
+#[cfg(not(target_os = "linux"))]
+use keyboard_linux::execute_engine_action;
 use keyboard_linux::{
-    KeyboardBackend, KeyboardDecision, X11KeyboardBackend, decision_for, execute_engine_action,
+    KeyboardBackend, KeyboardDecision, X11KeyboardBackend, decision_for,
+    execute_observed_engine_action,
 };
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -115,6 +118,7 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     } else {
         info!("Starting GUI settings application and background daemon...");
+        init_platform_gui()?;
 
         let (tx, rx) = mpsc::channel();
         let (gui_tx, gui_rx) = mpsc::channel();
@@ -157,6 +161,17 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
         )
         .map_err(|e| e.to_string().into())
     }
+}
+
+#[cfg(target_os = "linux")]
+fn init_platform_gui() -> Result<(), Box<dyn std::error::Error>> {
+    gtk::init().map_err(|error| format!("failed to initialize GTK for tray menu: {error}"))?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn init_platform_gui() -> Result<(), Box<dyn std::error::Error>> {
+    Ok(())
 }
 
 fn run_daemon(
@@ -256,9 +271,22 @@ fn run_daemon(
         backend.decide(decision)?;
 
         if decision == KeyboardDecision::Consume {
+            #[cfg(target_os = "linux")]
+            let observed_inserted_graphemes = observed_inserted_graphemes(event);
             let result = {
                 let mut injector = backend.text_injector();
-                execute_engine_action(&mut injector, &action)
+                #[cfg(target_os = "linux")]
+                {
+                    execute_observed_engine_action(
+                        &mut injector,
+                        &action,
+                        observed_inserted_graphemes,
+                    )
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    execute_engine_action(&mut injector, &action)
+                }
             };
             if let Err(injection_error) = result {
                 engine.reset();
@@ -266,6 +294,11 @@ fn run_daemon(
             }
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn observed_inserted_graphemes(event: vietnamese_core::KeyEvent) -> usize {
+    matches!(event.key, vietnamese_core::Key::Character(_)).into()
 }
 
 fn parse_options() -> Result<Option<Options>, String> {

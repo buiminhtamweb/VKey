@@ -42,6 +42,47 @@ pub fn execute_engine_action(
     }
 }
 
+pub fn execute_observed_engine_action(
+    injector: &mut impl TextInjector,
+    action: &EngineAction,
+    observed_inserted_graphemes: usize,
+) -> Result<()> {
+    match action {
+        EngineAction::PassThrough => Ok(()),
+        EngineAction::Consume => {
+            if observed_inserted_graphemes > 0 {
+                injector.delete_previous_graphemes(observed_inserted_graphemes)
+            } else {
+                Ok(())
+            }
+        }
+        EngineAction::Commit(text) => {
+            if observed_inserted_graphemes > 0 {
+                injector.delete_previous_graphemes(observed_inserted_graphemes)?;
+            }
+            if text.is_empty() {
+                Ok(())
+            } else {
+                injector.insert_text(text)
+            }
+        }
+        EngineAction::Replace {
+            delete_graphemes,
+            text,
+        } => {
+            let total_delete = delete_graphemes.saturating_add(observed_inserted_graphemes);
+            if total_delete > 0 {
+                injector.delete_previous_graphemes(total_delete)?;
+            }
+            if text.is_empty() {
+                Ok(())
+            } else {
+                injector.insert_text(text)
+            }
+        }
+    }
+}
+
 #[must_use]
 pub const fn decision_for(action: &EngineAction) -> KeyboardDecision {
     KeyboardDecision::from_engine_action(action)
@@ -107,6 +148,20 @@ mod tests {
         injector
     }
 
+    fn type_observed_pipeline(input: &str, config: EngineConfig) -> MockTextInjector {
+        let mut engine = InputEngine::new(config);
+        let mut injector = MockTextInjector::default();
+
+        for character in input.chars() {
+            let action = engine.process_key(KeyEvent::character(character));
+            injector.text.push(character);
+            if decision_for(&action) == KeyboardDecision::Consume {
+                execute_observed_engine_action(&mut injector, &action, 1).unwrap();
+            }
+        }
+        injector
+    }
+
     #[test]
     fn telex_sentence_reaches_the_target_without_raw_keystrokes() {
         let injector = type_through_pipeline("tieengs Vieejt!", EngineConfig::default());
@@ -115,6 +170,17 @@ mod tests {
         assert!(injector.actions.iter().any(|action| matches!(
             action,
             MockAction::Insert(text) if text.contains('ế')
+        )));
+    }
+
+    #[test]
+    fn observed_telex_sentence_repairs_raw_keystrokes_in_target() {
+        let injector = type_observed_pipeline("tieengs Vieejt!", EngineConfig::default());
+
+        assert_eq!(injector.text, "tiếng Việt!");
+        assert!(injector.actions.iter().any(|action| matches!(
+            action,
+            MockAction::Delete(count) if *count > 1
         )));
     }
 
