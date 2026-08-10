@@ -32,6 +32,9 @@ pub fn execute_engine_action(
         } => {
             if *delete_graphemes > 0 {
                 injector.delete_previous_graphemes(*delete_graphemes)?;
+                if !text.is_empty() {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
             }
             if text.is_empty() {
                 Ok(())
@@ -46,19 +49,27 @@ pub fn execute_observed_engine_action(
     injector: &mut impl TextInjector,
     action: &EngineAction,
     observed_inserted_graphemes: usize,
+    observed_deleted_graphemes: usize,
 ) -> Result<()> {
     match action {
         EngineAction::PassThrough => Ok(()),
         EngineAction::Consume => {
-            if observed_inserted_graphemes > 0 {
-                injector.delete_previous_graphemes(observed_inserted_graphemes)
+            let total_delete =
+                observed_inserted_graphemes.saturating_sub(observed_deleted_graphemes);
+            if total_delete > 0 {
+                injector.delete_previous_graphemes(total_delete)
             } else {
                 Ok(())
             }
         }
         EngineAction::Commit(text) => {
-            if observed_inserted_graphemes > 0 {
-                injector.delete_previous_graphemes(observed_inserted_graphemes)?;
+            let total_delete =
+                observed_inserted_graphemes.saturating_sub(observed_deleted_graphemes);
+            if total_delete > 0 {
+                injector.delete_previous_graphemes(total_delete)?;
+                if !text.is_empty() {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
             }
             if text.is_empty() {
                 Ok(())
@@ -70,9 +81,13 @@ pub fn execute_observed_engine_action(
             delete_graphemes,
             text,
         } => {
-            let total_delete = delete_graphemes.saturating_add(observed_inserted_graphemes);
+            let total_delete = (delete_graphemes + observed_inserted_graphemes)
+                .saturating_sub(observed_deleted_graphemes);
             if total_delete > 0 {
                 injector.delete_previous_graphemes(total_delete)?;
+                if !text.is_empty() {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
             }
             if text.is_empty() {
                 Ok(())
@@ -156,7 +171,7 @@ mod tests {
             let action = engine.process_key(KeyEvent::character(character));
             injector.text.push(character);
             if decision_for(&action) == KeyboardDecision::Consume {
-                execute_observed_engine_action(&mut injector, &action, 1).unwrap();
+                execute_observed_engine_action(&mut injector, &action, 1, 0).unwrap();
             }
         }
         injector

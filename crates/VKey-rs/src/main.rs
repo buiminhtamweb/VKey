@@ -165,7 +165,6 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(target_os = "linux")]
 fn init_platform_gui() -> Result<(), Box<dyn std::error::Error>> {
-    gtk::init().map_err(|error| format!("failed to initialize GTK for tray menu: {error}"))?;
     Ok(())
 }
 
@@ -268,11 +267,17 @@ fn run_daemon(
         let action = engine.process_key(event);
         let decision = decision_for(&action);
 
-        backend.decide(decision)?;
-
         if decision == KeyboardDecision::Consume {
+            // Perform injection FIRST while the device is still frozen by the
+            // sync grab.  XTest-injected events bypass passive grabs, so they
+            // reach the focused application immediately.  Only after injection
+            // completes do we thaw the device (via `decide`), guaranteeing that
+            // any fast-typed physical key queued behind the grab cannot overtake
+            // the injected characters.
             #[cfg(target_os = "linux")]
             let observed_inserted_graphemes = observed_inserted_graphemes(event);
+            #[cfg(target_os = "linux")]
+            let observed_deleted_graphemes = observed_deleted_graphemes(event);
             let result = {
                 let mut injector = backend.text_injector();
                 #[cfg(target_os = "linux")]
@@ -281,6 +286,7 @@ fn run_daemon(
                         &mut injector,
                         &action,
                         observed_inserted_graphemes,
+                        observed_deleted_graphemes,
                     )
                 }
                 #[cfg(not(target_os = "linux"))]
@@ -292,6 +298,13 @@ fn run_daemon(
                 engine.reset();
                 error!(error = %injection_error, "Text injection failed; composition reset");
             }
+
+            // NOW thaw the device — the injected text is already in the
+            // application's event queue, so the next physical key will arrive
+            // in the correct order.
+            backend.decide(decision)?;
+        } else {
+            backend.decide(decision)?;
         }
     }
 }
@@ -299,6 +312,11 @@ fn run_daemon(
 #[cfg(target_os = "linux")]
 fn observed_inserted_graphemes(event: vietnamese_core::KeyEvent) -> usize {
     matches!(event.key, vietnamese_core::Key::Character(_)).into()
+}
+
+#[cfg(target_os = "linux")]
+fn observed_deleted_graphemes(event: vietnamese_core::KeyEvent) -> usize {
+    matches!(event.key, vietnamese_core::Key::Backspace).into()
 }
 
 fn parse_options() -> Result<Option<Options>, String> {

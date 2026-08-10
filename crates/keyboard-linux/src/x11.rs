@@ -87,8 +87,8 @@ mod platform {
         original_injection_mapping: Vec<u32>,
         pending: Option<PendingEvent>,
         running: bool,
-        /// Number of fake key press+release pairs still to be drained from the X event queue.
-        injected_keycount: usize,
+        xtest_device_ids: Vec<u16>,
+        last_mapping_change: Option<std::time::Instant>,
     }
 
     impl std::fmt::Debug for X11KeyboardBackend {
@@ -212,6 +212,19 @@ mod platform {
                 injection_keycode,
                 "X11 input controller connected"
             );
+            let mut xtest_device_ids = Vec::new();
+            if let Ok(reply) = connection.xinput_xi_query_device(u16::from(Device::ALL)) {
+                if let Ok(reply_data) = reply.reply() {
+                    for info in reply_data.infos {
+                        let name = String::from_utf8_lossy(&info.name).to_lowercase();
+                        if name.contains("xtest") {
+                            xtest_device_ids.push(info.deviceid);
+                        }
+                    }
+                }
+            }
+            debug!(?xtest_device_ids, "Identified XTEST virtual devices");
+
             Ok(Self {
                 connection,
                 root,
@@ -225,7 +238,8 @@ mod platform {
                 original_injection_mapping: original_mapping,
                 pending: None,
                 running: false,
-                injected_keycount: 0,
+                xtest_device_ids,
+                last_mapping_change: None,
             })
         }
 
@@ -396,6 +410,17 @@ mod platform {
             }
             let expected = self.require_focused_window()?;
             let injection_keycode = self.injection_keycode;
+
+            // Check if any character in the text requires temporary mapping.
+            let mut mapping_needed = false;
+            for character in text.chars() {
+                let keysym = Keysym::from_char(character).raw();
+                if find_direct_keycode_in(&self.keymap, keysym).is_none() {
+                    mapping_needed = true;
+                    break;
+                }
+            }
+
             let mut mapping = TemporaryMapping::new(
                 &self.connection,
                 injection_keycode,
@@ -403,26 +428,42 @@ mod platform {
                 &self.original_injection_mapping,
             );
 
-            let mut keys_injected: usize = 0;
             let injection_result = (|| {
                 for character in text.chars() {
                     ensure_focus(mapping.connection(), expected)?;
                     let keysym = Keysym::from_char(character).raw();
-                    let keycode = if let Some(direct) = find_direct_keycode_in(&self.keymap, keysym)
-                    {
-                        direct
+                    let keycode = if !mapping_needed {
+                        find_direct_keycode_in(&self.keymap, keysym).unwrap()
                     } else {
                         mapping.set_keysym(keysym)?;
                         injection_keycode
                     };
                     fake_key_on(mapping.connection(), keycode)?;
-                    keys_injected += 1;
-                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    let delay = if keycode == injection_keycode { 40 } else { 15 };
+                    std::thread::sleep(std::time::Duration::from_millis(delay));
                 }
+                // Flush to ensure the key events reach the X server before
+                // we restore the keymap.  This guarantees the application
+                // decodes the injected keys using the temporary mapping.
+                mapping
+                    .connection()
+                    .flush()
+                    .map_err(|e| KeyboardError::ConnectionLost(e.to_string()))?;
                 ensure_focus(mapping.connection(), expected)
             })();
+            if mapping_needed {
+                // Wait for the application to process the injected key events
+                // using the temporary keymap BEFORE restoring the original
+                // mapping.  Without this delay, the MappingNotify from
+                // restore() may arrive before the application decodes the
+                // injected keypress, causing it to use the restored (wrong)
+                // mapping and lose the character.
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
             let restore_result = mapping.restore();
-            self.injected_keycount += keys_injected;
+            if mapping_needed {
+                self.last_mapping_change = Some(std::time::Instant::now());
+            }
             injection_result.and(restore_result)
         }
 
@@ -436,8 +477,7 @@ mod platform {
                 for _ in 0..count {
                     ensure_focus(&self.connection, expected)?;
                     fake_key_on(&self.connection, backspace_keycode)?;
-                    self.injected_keycount += 1;
-                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    std::thread::sleep(std::time::Duration::from_millis(15));
                 }
                 return Ok(());
             }
@@ -450,20 +490,18 @@ mod platform {
                 &self.original_injection_mapping,
             );
 
-            let mut keys_injected: usize = 0;
             let injection_result = (|| {
                 ensure_focus(mapping.connection(), expected)?;
                 mapping.set_keysym(key::BackSpace)?;
                 for _ in 0..count {
                     ensure_focus(mapping.connection(), expected)?;
                     fake_key_on(mapping.connection(), injection_keycode)?;
-                    keys_injected += 1;
-                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    std::thread::sleep(std::time::Duration::from_millis(15));
                 }
                 ensure_focus(mapping.connection(), expected)
             })();
             let restore_result = mapping.restore();
-            self.injected_keycount += keys_injected;
+            self.last_mapping_change = Some(std::time::Instant::now());
             injection_result.and(restore_result)
         }
 
@@ -537,9 +575,10 @@ mod platform {
                 };
                 match event {
                     Event::XinputRawKeyPress(event) => {
-                        // Skip events that were injected by us.
-                        if self.injected_keycount > 0 {
-                            self.injected_keycount -= 1;
+                        // Skip events that were injected by XTEST.
+                        if self.xtest_device_ids.contains(&event.deviceid)
+                            || self.xtest_device_ids.contains(&event.sourceid)
+                        {
                             continue;
                         }
                         if event.detail == u32::from(self.injection_keycode) {
@@ -548,7 +587,12 @@ mod platform {
                         return self.decode_raw(&event);
                     }
                     Event::XinputRawKeyRelease(event) => {
-                        // Corresponding release for a skipped press — also skip.
+                        // Skip events that were injected by XTEST.
+                        if self.xtest_device_ids.contains(&event.deviceid)
+                            || self.xtest_device_ids.contains(&event.sourceid)
+                        {
+                            continue;
+                        }
                         if event.detail == u32::from(self.injection_keycode) {
                             continue;
                         }
@@ -557,6 +601,11 @@ mod platform {
                         }
                     }
                     Event::XinputKeyPress(event) => {
+                        if self.xtest_device_ids.contains(&event.deviceid)
+                            || self.xtest_device_ids.contains(&event.sourceid)
+                        {
+                            continue;
+                        }
                         if event.detail == u32::from(self.injection_keycode) {
                             continue;
                         }
@@ -573,6 +622,11 @@ mod platform {
                         };
                     }
                     Event::XinputKeyRelease(event) => {
+                        if self.xtest_device_ids.contains(&event.deviceid)
+                            || self.xtest_device_ids.contains(&event.sourceid)
+                        {
+                            continue;
+                        }
                         if event.detail == u32::from(self.injection_keycode) {
                             continue;
                         }
@@ -598,6 +652,17 @@ mod platform {
                 .pending
                 .take()
                 .ok_or(KeyboardError::NoPendingDecision)?;
+
+            // If a keymap change happened recently, delay thawing the device to let
+            // the application reload the keymap and process the queue.
+            if let Some(last_change) = self.last_mapping_change {
+                let elapsed = last_change.elapsed();
+                let threshold = std::time::Duration::from_millis(200);
+                if elapsed < threshold {
+                    std::thread::sleep(threshold - elapsed);
+                }
+            }
+
             let mode = EventMode::ASYNC_DEVICE;
             let allow_result = self
                 .connection
@@ -677,7 +742,7 @@ mod platform {
             cookie
                 .check()
                 .map_err(|error| KeyboardError::X11Protocol(error.to_string()))?;
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            std::thread::sleep(std::time::Duration::from_millis(25));
             Ok(())
         }
 
@@ -691,7 +756,7 @@ mod platform {
                 .check()
                 .map_err(|error| KeyboardError::X11Protocol(error.to_string()))?;
             self.dirty = false;
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            std::thread::sleep(std::time::Duration::from_millis(25));
             Ok(())
         }
     }
@@ -814,7 +879,6 @@ mod platform {
         None
     }
 
-    /// Send a single key press+release via XTest on the given connection.
     fn fake_key_on(connection: &XCBConnection, keycode: u8) -> Result<()> {
         let send = |event_type| -> Result<()> {
             connection
@@ -823,10 +887,9 @@ mod platform {
                 .check()
                 .map_err(|error| KeyboardError::X11Protocol(error.to_string()))
         };
-        let press_result = send(xproto::KEY_PRESS_EVENT);
-        // Always attempt the release, even if checking the press failed.
-        let release_result = send(xproto::KEY_RELEASE_EVENT);
-        press_result.and(release_result)
+        send(xproto::KEY_PRESS_EVENT)?;
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        send(xproto::KEY_RELEASE_EVENT)
     }
 
     fn focused_window(connection: &XCBConnection) -> Result<Option<WindowId>> {

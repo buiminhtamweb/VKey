@@ -6,17 +6,21 @@ use crate::{
     word,
 };
 
-pub fn transform(input: &str, smart_tone: bool) -> String {
+pub fn transform(input: &str, smart_tone: bool, restore_typing: bool) -> String {
     let mut output = Vec::with_capacity(input.chars().count());
     let mut tone = None;
 
     for character in input.chars() {
+        if character.eq_ignore_ascii_case(&'z') && tone.is_some() {
+            tone = None;
+            continue;
+        }
         if let Some(candidate) = Tone::from_telex(character) {
             if word::contains_vowel(&output) {
-                if tone == Some(candidate) {
+                if restore_typing && tone == Some(candidate) {
                     tone = None;
                     output.push(character);
-                } else {
+                } else if tone != Some(candidate) {
                     tone = Some(candidate);
                 }
                 continue;

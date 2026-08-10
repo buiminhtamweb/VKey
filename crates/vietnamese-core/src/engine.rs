@@ -48,22 +48,15 @@ impl InputEngine {
                 self.reset();
                 EngineAction::PassThrough
             }
-            Key::Character(character)
-                if self.config.restore_typing
-                    && character.eq_ignore_ascii_case(&self.config.restore_key)
-                    && self.composition.can_restore() =>
-            {
-                let old = self.composition.rendered().to_owned();
-                self.composition.restore();
-                let old_conv = crate::charset::convert(&old, self.config.charset);
-                let new_conv =
-                    crate::charset::convert(self.composition.rendered(), self.config.charset);
-                replacement(&old_conv, &new_conv)
-            }
             Key::Character(character) => {
                 let old = self.composition.rendered().to_owned();
-                self.composition
-                    .push(character, self.config.input_method, self.config.smart_tone);
+                self.composition.push(
+                    character,
+                    self.config.input_method,
+                    self.config.smart_tone,
+                    self.config.restore_typing,
+                    self.config.spelling_check,
+                );
                 let new = self.composition.rendered();
 
                 let old_conv = crate::charset::convert(&old, self.config.charset);

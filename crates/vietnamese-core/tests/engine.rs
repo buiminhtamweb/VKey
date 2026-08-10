@@ -138,14 +138,14 @@ fn backspace_removes_composed_graphemes() {
 }
 
 #[test]
-fn restore_key_returns_original_keystrokes() {
+fn tone_cancellation_key_removes_tone() {
     let mut engine = InputEngine::new(EngineConfig::default());
     let mut output = String::new();
     for character in "tieengsz".chars() {
         let action = engine.process_key(KeyEvent::character(character));
         apply_action(&mut output, action, Some(character));
     }
-    assert_eq!(output, "tieengs");
+    assert_eq!(output, "tiêng");
 }
 
 #[test]
@@ -216,6 +216,7 @@ fn output_is_unicode_nfc() {
 #[test]
 fn test_telex_end_of_word_modifiers() {
     assert_eq!(type_text("tama"), "tâm");
+    assert_eq!(type_text("tamaa"), "tama");
     assert_eq!(type_text("toto"), "tôt");
     assert_eq!(type_text("totos"), "tốt");
     assert_eq!(type_text("hopos"), "hốp");
@@ -228,12 +229,32 @@ fn test_telex_end_of_word_modifiers() {
 
 #[test]
 fn test_tone_toggling() {
-    assert_eq!(type_text("sangs"), "sáng");
-    assert_eq!(type_text("sangss"), "sangs");
-    assert_eq!(type_text("sangssf"), "sàngs");
-    assert_eq!(type_text("sangssr"), "sảngs");
-    assert_eq!(type_vni("sang1"), "sáng");
-    assert_eq!(type_vni("sang11"), "sang1");
+    let config_telex = EngineConfig {
+        spelling_check: false,
+        ..EngineConfig::default()
+    };
+
+    let config_vni = EngineConfig {
+        input_method: InputMethod::Vni,
+        spelling_check: false,
+        ..EngineConfig::default()
+    };
+
+    assert_eq!(type_text_with_config("sangs", config_telex.clone()), "sáng");
+    assert_eq!(
+        type_text_with_config("sangss", config_telex.clone()),
+        "sangs"
+    );
+    assert_eq!(
+        type_text_with_config("sangssf", config_telex.clone()),
+        "sàngs"
+    );
+    assert_eq!(
+        type_text_with_config("sangssr", config_telex.clone()),
+        "sảngs"
+    );
+    assert_eq!(type_text_with_config("sang1", config_vni.clone()), "sáng");
+    assert_eq!(type_text_with_config("sang11", config_vni.clone()), "sang1");
 }
 
 #[test]
@@ -268,4 +289,47 @@ fn test_charsets() {
     );
     assert_eq!(type_text_with_config("dduongwf", config_tcvn3), "®õêng");
     assert_eq!(type_text_with_config("dduongwf", config_vni), "ñöôøng");
+}
+
+#[test]
+fn test_spelling_check() {
+    let config_spelling = EngineConfig {
+        spelling_check: true,
+        ..EngineConfig::default()
+    };
+
+    let config_no_spelling = EngineConfig {
+        spelling_check: false,
+        ..EngineConfig::default()
+    };
+
+    // 'tuyetf' has stop consonant 't' and grave tone 'f' which is invalid.
+    assert_eq!(
+        type_text_with_config("tuyetf", config_spelling.clone()),
+        "tuyetf"
+    );
+    assert_eq!(
+        type_text_with_config("tuyetf", config_no_spelling.clone()),
+        "tuyềt"
+    );
+
+    // 'tuyets' has stop consonant 't' and acute tone 's' which is valid.
+    assert_eq!(
+        type_text_with_config("tuyets", config_spelling.clone()),
+        "tuyết"
+    );
+    assert_eq!(
+        type_text_with_config("tuyets", config_no_spelling.clone()),
+        "tuyết"
+    );
+
+    // 'nghành' is invalid because 'ngh' must only stand before 'i', 'e', 'ê'.
+    assert_eq!(
+        type_text_with_config("nghanhf", config_spelling.clone()),
+        "nghanhf"
+    );
+    assert_eq!(
+        type_text_with_config("nghanhf", config_no_spelling.clone()),
+        "nghành"
+    );
 }

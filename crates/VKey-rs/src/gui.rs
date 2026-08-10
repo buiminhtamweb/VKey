@@ -9,8 +9,11 @@ use vietnamese_core::{Charset, EngineConfig, InputMethod};
 use crate::{AppMessage, GuiMessage};
 
 // Thread-safe wrapper for MenuItem to allow updating tray menu items from background threads on Windows
+#[cfg(not(target_os = "linux"))]
 struct SendMenuItem(MenuItem);
+#[cfg(not(target_os = "linux"))]
 unsafe impl Send for SendMenuItem {}
+#[cfg(not(target_os = "linux"))]
 unsafe impl Sync for SendMenuItem {}
 
 #[cfg(target_os = "windows")]
@@ -35,9 +38,10 @@ fn force_show_window() {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "windows"), not(target_os = "linux")))]
 fn force_show_window() {}
 
+#[cfg(not(target_os = "linux"))]
 impl std::ops::Deref for SendMenuItem {
     type Target = MenuItem;
     fn deref(&self) -> &Self::Target {
@@ -46,10 +50,14 @@ impl std::ops::Deref for SendMenuItem {
 }
 
 // Thread-safe wrapper for TrayIcon to allow setting tray icons from background threads on Windows
+#[cfg(not(target_os = "linux"))]
 pub struct SendTrayIcon(TrayIcon);
+#[cfg(not(target_os = "linux"))]
 unsafe impl Send for SendTrayIcon {}
+#[cfg(not(target_os = "linux"))]
 unsafe impl Sync for SendTrayIcon {}
 
+#[cfg(not(target_os = "linux"))]
 impl std::ops::Deref for SendTrayIcon {
     type Target = TrayIcon;
     fn deref(&self) -> &Self::Target {
@@ -61,18 +69,384 @@ pub struct AppGui {
     config: EngineConfig,
     tx: Sender<AppMessage>,
     gui_rx: Receiver<GuiMessage>,
+    #[cfg(not(target_os = "linux"))]
     tray_icon: Option<std::sync::Arc<SendTrayIcon>>,
+    #[cfg(not(target_os = "linux"))]
     menu_enabled: MenuItem,
+    #[cfg(not(target_os = "linux"))]
     menu_telex: MenuItem,
+    #[cfg(not(target_os = "linux"))]
     menu_vni: MenuItem,
+    #[cfg(not(target_os = "linux"))]
     menu_unicode: MenuItem,
+    #[cfg(not(target_os = "linux"))]
     menu_tcvn3: MenuItem,
+    #[cfg(not(target_os = "linux"))]
     menu_vni_charset: MenuItem,
     window_visible: bool,
     shared_config: std::sync::Arc<std::sync::Mutex<EngineConfig>>,
+    #[cfg(target_os = "linux")]
+    tray_channel: Sender<EngineConfig>,
+}
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+fn sync_linux_tray_states(
+    config: &EngineConfig,
+    menu_enabled: &MenuItem,
+    menu_telex: &MenuItem,
+    menu_vni: &MenuItem,
+    menu_unicode: &MenuItem,
+    menu_tcvn3: &MenuItem,
+    menu_vni_charset: &MenuItem,
+    tray_icon: &TrayIcon,
+) {
+    menu_enabled.set_text(if config.enabled {
+        "✓ Bật tiếng Việt"
+    } else {
+        "  Bật tiếng Việt"
+    });
+    menu_telex.set_text(if config.input_method == InputMethod::Telex {
+        "✓ Telex"
+    } else {
+        "  Telex"
+    });
+    menu_vni.set_text(if config.input_method == InputMethod::Vni {
+        "✓ VNI"
+    } else {
+        "  VNI"
+    });
+    menu_unicode.set_text(if config.charset == Charset::Unicode {
+        "✓ Unicode"
+    } else {
+        "  Unicode"
+    });
+    menu_tcvn3.set_text(if config.charset == Charset::Tcvn3 {
+        "✓ TCVN3 (ABC)"
+    } else {
+        "  TCVN3 (ABC)"
+    });
+    menu_vni_charset.set_text(if config.charset == Charset::Vni {
+        "✓ VNI Windows"
+    } else {
+        "  VNI Windows"
+    });
+
+    let icon = generate_tray_icon(config.enabled);
+    let _ = tray_icon.set_icon(Some(icon));
 }
 
 impl AppGui {
+    #[cfg(target_os = "linux")]
+    pub fn new(
+        config: EngineConfig,
+        tx: Sender<AppMessage>,
+        gui_rx: Receiver<GuiMessage>,
+        gui_tx: Sender<GuiMessage>,
+        ctx: egui::Context,
+    ) -> Self {
+        let (tray_tx, tray_rx) = std::sync::mpsc::channel::<EngineConfig>();
+
+        let config_clone = config.clone();
+        let tx_clone = tx.clone();
+        let gui_tx_clone = gui_tx.clone();
+        let ctx_clone = ctx.clone();
+
+        std::thread::spawn(move || {
+            // Initialize GTK on the background thread
+            if let Err(err) = gtk::init() {
+                tracing::error!("Failed to initialize GTK on background thread: {}", err);
+                return;
+            }
+
+            // Create MenuItems
+            let menu_enabled = MenuItem::with_id(
+                "enabled",
+                if config_clone.enabled {
+                    "✓ Bật tiếng Việt"
+                } else {
+                    "  Bật tiếng Việt"
+                },
+                true,
+                None,
+            );
+            let menu_telex = MenuItem::with_id(
+                "method_telex",
+                if config_clone.input_method == InputMethod::Telex {
+                    "✓ Telex"
+                } else {
+                    "  Telex"
+                },
+                true,
+                None,
+            );
+            let menu_vni = MenuItem::with_id(
+                "method_vni",
+                if config_clone.input_method == InputMethod::Vni {
+                    "✓ VNI"
+                } else {
+                    "  VNI"
+                },
+                true,
+                None,
+            );
+            let menu_unicode = MenuItem::with_id(
+                "charset_unicode",
+                if config_clone.charset == Charset::Unicode {
+                    "✓ Unicode"
+                } else {
+                    "  Unicode"
+                },
+                true,
+                None,
+            );
+            let menu_tcvn3 = MenuItem::with_id(
+                "charset_tcvn3",
+                if config_clone.charset == Charset::Tcvn3 {
+                    "✓ TCVN3 (ABC)"
+                } else {
+                    "  TCVN3 (ABC)"
+                },
+                true,
+                None,
+            );
+            let menu_vni_charset = MenuItem::with_id(
+                "charset_vni",
+                if config_clone.charset == Charset::Vni {
+                    "✓ VNI Windows"
+                } else {
+                    "  VNI Windows"
+                },
+                true,
+                None,
+            );
+
+            let method_submenu = Submenu::with_id("method", "Kiểu gõ", true);
+            method_submenu.append(&menu_telex).unwrap();
+            method_submenu.append(&menu_vni).unwrap();
+
+            let charset_submenu = Submenu::with_id("charset", "Bảng mã", true);
+            charset_submenu.append(&menu_unicode).unwrap();
+            charset_submenu.append(&menu_tcvn3).unwrap();
+            charset_submenu.append(&menu_vni_charset).unwrap();
+
+            let tray_menu = Menu::new();
+            tray_menu.append(&menu_enabled).unwrap();
+            tray_menu.append(&method_submenu).unwrap();
+            tray_menu.append(&charset_submenu).unwrap();
+            tray_menu
+                .append(&MenuItem::with_id(
+                    "settings",
+                    "Hiển thị cài đặt",
+                    true,
+                    None,
+                ))
+                .unwrap();
+            tray_menu
+                .append(&MenuItem::with_id("exit", "Thoát", true, None))
+                .unwrap();
+
+            let icon = generate_tray_icon(config_clone.enabled);
+            let tray_icon = TrayIconBuilder::new()
+                .with_menu(Box::new(tray_menu))
+                .with_menu_on_left_click(false)
+                .with_tooltip("VKey - Bộ gõ Tiếng Việt")
+                .with_icon(icon)
+                .build()
+                .unwrap();
+
+            let tray_event_receiver = tray_icon::TrayIconEvent::receiver();
+            let menu_event_receiver = tray_icon::menu::MenuEvent::receiver();
+
+            let mut current_config = config_clone;
+
+            gtk::glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
+                // 1. Poll updates from the main thread
+                while let Ok(new_cfg) = tray_rx.try_recv() {
+                    current_config = new_cfg.clone();
+                    sync_linux_tray_states(
+                        &current_config,
+                        &menu_enabled,
+                        &menu_telex,
+                        &menu_vni,
+                        &menu_unicode,
+                        &menu_tcvn3,
+                        &menu_vni_charset,
+                        &tray_icon,
+                    );
+                }
+
+                // 2. Poll tray click/double-click events
+                while let Ok(event) = tray_event_receiver.try_recv() {
+                    match event {
+                        tray_icon::TrayIconEvent::Click {
+                            button: tray_icon::MouseButton::Left,
+                            button_state: tray_icon::MouseButtonState::Up,
+                            ..
+                        }
+                        | tray_icon::TrayIconEvent::DoubleClick {
+                            button: tray_icon::MouseButton::Left,
+                            ..
+                        } => {
+                            current_config.enabled = !current_config.enabled;
+                            let _ = tx_clone.send(AppMessage::UpdateConfig(current_config.clone()));
+                            let _ =
+                                gui_tx_clone.send(GuiMessage::StateChanged(current_config.clone()));
+                            sync_linux_tray_states(
+                                &current_config,
+                                &menu_enabled,
+                                &menu_telex,
+                                &menu_vni,
+                                &menu_unicode,
+                                &menu_tcvn3,
+                                &menu_vni_charset,
+                                &tray_icon,
+                            );
+                            ctx_clone.request_repaint();
+                        }
+                        _ => {}
+                    }
+                }
+
+                // 3. Poll menu item activation events
+                while let Ok(event) = menu_event_receiver.try_recv() {
+                    let id = event.id.as_ref();
+                    match id {
+                        "exit" => {
+                            let _ = tx_clone.send(AppMessage::Exit);
+                        }
+                        "settings" => {
+                            let _ = gui_tx_clone.send(GuiMessage::ShowSettingsWindow);
+                            ctx_clone.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                            ctx_clone.send_viewport_cmd(egui::ViewportCommand::Focus);
+                            ctx_clone.request_repaint();
+                        }
+                        "enabled" => {
+                            current_config.enabled = !current_config.enabled;
+                            let _ = tx_clone.send(AppMessage::UpdateConfig(current_config.clone()));
+                            let _ =
+                                gui_tx_clone.send(GuiMessage::StateChanged(current_config.clone()));
+                            sync_linux_tray_states(
+                                &current_config,
+                                &menu_enabled,
+                                &menu_telex,
+                                &menu_vni,
+                                &menu_unicode,
+                                &menu_tcvn3,
+                                &menu_vni_charset,
+                                &tray_icon,
+                            );
+                            ctx_clone.request_repaint();
+                        }
+                        "method_telex" => {
+                            current_config.input_method = InputMethod::Telex;
+                            let _ = tx_clone.send(AppMessage::UpdateConfig(current_config.clone()));
+                            let _ =
+                                gui_tx_clone.send(GuiMessage::StateChanged(current_config.clone()));
+                            sync_linux_tray_states(
+                                &current_config,
+                                &menu_enabled,
+                                &menu_telex,
+                                &menu_vni,
+                                &menu_unicode,
+                                &menu_tcvn3,
+                                &menu_vni_charset,
+                                &tray_icon,
+                            );
+                            ctx_clone.request_repaint();
+                        }
+                        "method_vni" => {
+                            current_config.input_method = InputMethod::Vni;
+                            let _ = tx_clone.send(AppMessage::UpdateConfig(current_config.clone()));
+                            let _ =
+                                gui_tx_clone.send(GuiMessage::StateChanged(current_config.clone()));
+                            sync_linux_tray_states(
+                                &current_config,
+                                &menu_enabled,
+                                &menu_telex,
+                                &menu_vni,
+                                &menu_unicode,
+                                &menu_tcvn3,
+                                &menu_vni_charset,
+                                &tray_icon,
+                            );
+                            ctx_clone.request_repaint();
+                        }
+                        "charset_unicode" => {
+                            current_config.charset = Charset::Unicode;
+                            let _ = tx_clone.send(AppMessage::UpdateConfig(current_config.clone()));
+                            let _ =
+                                gui_tx_clone.send(GuiMessage::StateChanged(current_config.clone()));
+                            sync_linux_tray_states(
+                                &current_config,
+                                &menu_enabled,
+                                &menu_telex,
+                                &menu_vni,
+                                &menu_unicode,
+                                &menu_tcvn3,
+                                &menu_vni_charset,
+                                &tray_icon,
+                            );
+                            ctx_clone.request_repaint();
+                        }
+                        "charset_tcvn3" => {
+                            current_config.charset = Charset::Tcvn3;
+                            let _ = tx_clone.send(AppMessage::UpdateConfig(current_config.clone()));
+                            let _ =
+                                gui_tx_clone.send(GuiMessage::StateChanged(current_config.clone()));
+                            sync_linux_tray_states(
+                                &current_config,
+                                &menu_enabled,
+                                &menu_telex,
+                                &menu_vni,
+                                &menu_unicode,
+                                &menu_tcvn3,
+                                &menu_vni_charset,
+                                &tray_icon,
+                            );
+                            ctx_clone.request_repaint();
+                        }
+                        "charset_vni" => {
+                            current_config.charset = Charset::Vni;
+                            let _ = tx_clone.send(AppMessage::UpdateConfig(current_config.clone()));
+                            let _ =
+                                gui_tx_clone.send(GuiMessage::StateChanged(current_config.clone()));
+                            sync_linux_tray_states(
+                                &current_config,
+                                &menu_enabled,
+                                &menu_telex,
+                                &menu_vni,
+                                &menu_unicode,
+                                &menu_tcvn3,
+                                &menu_vni_charset,
+                                &tray_icon,
+                            );
+                            ctx_clone.request_repaint();
+                        }
+                        _ => {}
+                    }
+                }
+
+                gtk::glib::ControlFlow::Continue
+            });
+
+            // Start GTK main loop on the background thread
+            gtk::main();
+        });
+
+        let shared_config = std::sync::Arc::new(std::sync::Mutex::new(config.clone()));
+
+        Self {
+            config,
+            tx,
+            gui_rx,
+            window_visible: true,
+            shared_config,
+            tray_channel: tray_tx,
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
     pub fn new(
         config: EngineConfig,
         tx: Sender<AppMessage>,
@@ -366,7 +740,9 @@ impl AppGui {
     }
 
     fn update_config(&mut self, new_config: EngineConfig, ctx: &egui::Context) {
+        #[cfg(not(target_os = "linux"))]
         let old_enabled = self.config.enabled;
+
         self.config = new_config.clone();
 
         // Update shared lock
@@ -378,20 +754,29 @@ impl AppGui {
         // Notify background thread
         let _ = self.tx.send(AppMessage::UpdateConfig(self.config.clone()));
 
-        // Sync tray menu states
-        self.sync_menu_states();
+        #[cfg(target_os = "linux")]
+        {
+            let _ = self.tray_channel.send(self.config.clone());
+        }
 
-        // Update icon if enabled state toggled
-        if old_enabled != self.config.enabled {
-            if let Some(tray) = &mut self.tray_icon {
-                let icon = generate_tray_icon(self.config.enabled);
-                let _ = tray.set_icon(Some(icon));
+        #[cfg(not(target_os = "linux"))]
+        {
+            // Sync tray menu states
+            self.sync_menu_states();
+
+            // Update icon if enabled state toggled
+            if old_enabled != self.config.enabled {
+                if let Some(tray) = &mut self.tray_icon {
+                    let icon = generate_tray_icon(self.config.enabled);
+                    let _ = tray.set_icon(Some(icon));
+                }
             }
         }
 
         ctx.request_repaint();
     }
 
+    #[cfg(not(target_os = "linux"))]
     fn sync_menu_states(&self) {
         self.menu_enabled.set_text(if self.config.enabled {
             "✓ Bật tiếng Việt"
@@ -437,6 +822,7 @@ impl eframe::App for AppGui {
         let current_shared = self.shared_config.lock().unwrap().clone();
         if current_shared != self.config {
             self.config = current_shared;
+            #[cfg(not(target_os = "linux"))]
             self.sync_menu_states();
         }
 
@@ -694,6 +1080,11 @@ impl eframe::App for AppGui {
                             &mut smart_tone,
                             egui::RichText::new("Đặt dấu xoay vòng (Smart Tone)")
                                 .color(egui::Color32::BLACK),
+                        ).on_hover_text(
+                            "Tự động đặt dấu thanh chuẩn theo quy tắc tiếng Việt hiện đại (kiểu mới).\n\
+                             Ví dụ:\n\
+                             - Bật (Smart): h-o-a-f -> hoà (dấu thanh đặt ở chữ 'a')\n\
+                             - Tắt (Classic): h-o-a-f -> hòa (dấu thanh đặt ở chữ 'o')"
                         );
                         if st_chk.changed() {
                             self.config.smart_tone = smart_tone;
@@ -705,9 +1096,30 @@ impl eframe::App for AppGui {
                             &mut restore_typing,
                             egui::RichText::new("Khôi phục phím khi gõ sai (Restore typing)")
                                 .color(egui::Color32::BLACK),
+                        ).on_hover_text(
+                            "Cho phép gõ hai lần phím dấu để khôi phục phím chữ gốc (tránh lỗi khi gõ từ tiếng Anh).\n\
+                             Ví dụ:\n\
+                             - Bật: Gõ 'ss' trên chữ 'lá' -> 'las'\n\
+                             - Tắt: Gõ 'ss' trên chữ 'lá' -> 'lá'"
                         );
                         if rt_chk.changed() {
                             self.config.restore_typing = restore_typing;
+                            config_changed = true;
+                        }
+
+                        let mut spelling_check = self.config.spelling_check;
+                        let sc_chk = ui.checkbox(
+                            &mut spelling_check,
+                            egui::RichText::new("Tự động sửa lỗi chính tả (Autocorrect)")
+                                .color(egui::Color32::BLACK),
+                        ).on_hover_text(
+                            "Tự động kiểm tra chính tả và chặn các dấu thanh hoặc mũ không hợp lệ trong tiếng Việt.\n\
+                             Ví dụ:\n\
+                             - Bật: Gõ 'tuyetf' -> 'tuyetf' (chặn dấu huyền trên phụ âm cuối 't')\n\
+                             - Tắt: Gõ 'tuyetf' -> 'tuyềt' (cho phép gõ dấu sai chính tả)"
+                        );
+                        if sc_chk.changed() {
+                            self.config.spelling_check = spelling_check;
                             config_changed = true;
                         }
 
