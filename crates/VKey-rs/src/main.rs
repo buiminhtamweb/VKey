@@ -267,12 +267,16 @@ fn run_daemon(
         let decision = decision_for(&action);
 
         if decision == KeyboardDecision::Consume {
-            // Perform injection FIRST while the device is still frozen by the
-            // sync grab.  XTest-injected events bypass passive grabs, so they
-            // reach the focused application immediately.  Only after injection
-            // completes do we thaw the device (via `decide`), guaranteeing that
-            // any fast-typed physical key queued behind the grab cannot overtake
-            // the injected characters.
+            // A Windows low-level hook must receive the consume decision before
+            // SendInput runs. Otherwise the hook can hit its decision timeout,
+            // pass the original Telex/VNI key to the application, and only then
+            // apply the replacement (for example `buif` becoming `buùi`).
+            #[cfg(target_os = "windows")]
+            backend.decide(decision)?;
+
+            // On X11, keep the device frozen until injection is complete. XTest
+            // events bypass the passive grabs and preserve ordering with any
+            // physical keys queued behind the grab.
             #[cfg(target_os = "linux")]
             let observed_inserted_graphemes = observed_inserted_graphemes(event);
             #[cfg(target_os = "linux")]
@@ -298,9 +302,9 @@ fn run_daemon(
                 error!(error = %injection_error, "Text injection failed; composition reset");
             }
 
-            // NOW thaw the device — the injected text is already in the
-            // application's event queue, so the next physical key will arrive
-            // in the correct order.
+            // X11 is released only after its replacement has been queued. Other
+            // non-Windows backends do not use the Windows hook handshake either.
+            #[cfg(not(target_os = "windows"))]
             backend.decide(decision)?;
         } else {
             backend.decide(decision)?;

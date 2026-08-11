@@ -127,17 +127,21 @@ XInput2 2.0 or newer and XKB. Root access is neither needed nor supported.
 ## Build
 
 The repository scripts always start from the repository directory, so they can
-be called from any current working directory. On Windows, run them from Git
-Bash; on Linux/macOS, use a normal Bash shell.
+be called from any current working directory. On Windows, use `build.bat` and
+`dev.bat` from CMD or PowerShell. On Linux/macOS, use the Bash variants.
+
+```bat
+:: Windows
+build.bat
+build.bat --quick
+build.bat --check-only
+build.bat --no-package
+```
 
 ```bash
-# Full validation + release archive in target/dist/
+# Linux/macOS
 bash build.sh
-
-# Fast release archive without fmt/clippy/tests
 bash build.sh --quick
-
-# Validation only, or build binaries without packaging
 bash build.sh --check-only
 bash build.sh --no-package
 ```
@@ -153,13 +157,24 @@ keyboard-core-debug
 
 Useful development shortcuts:
 
+```bat
+:: Windows
+dev.bat run                    :: GUI + keyboard service, debug input enabled
+dev.bat headless               :: keyboard service only
+dev.bat core "buif"            :: prints: bùi
+dev.bat check                  :: fmt + check + Clippy
+dev.bat all                    :: complete validation + debug build
+dev.bat package --quick        :: fast release package
+```
+
 ```bash
-bash dev.sh run                    # GUI + keyboard service, debug input enabled
-bash dev.sh headless               # keyboard service only
-bash dev.sh core "buif"            # prints: bùi
-bash dev.sh check                  # fmt + check + Clippy
-bash dev.sh all                    # complete validation + debug build
-bash dev.sh package --quick        # fast release package
+# Linux/macOS
+bash dev.sh run
+bash dev.sh headless
+bash dev.sh core "buif"
+bash dev.sh check
+bash dev.sh all
+bash dev.sh package --quick
 ```
 
 ## Run
