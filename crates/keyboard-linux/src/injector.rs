@@ -15,6 +15,17 @@ pub trait TextInjector {
     /// grapheme deletion behavior.
     fn delete_previous_graphemes(&mut self, count: usize) -> Result<()>;
 
+    fn replace_text(&mut self, delete_graphemes: usize, text: &str) -> Result<()> {
+        if delete_graphemes > 0 {
+            self.delete_previous_graphemes(delete_graphemes)?;
+        }
+        if text.is_empty() {
+            Ok(())
+        } else {
+            self.insert_text(text)
+        }
+    }
+
     fn current_target(&self) -> Result<Option<WindowId>>;
 }
 
@@ -29,16 +40,7 @@ pub fn execute_engine_action(
         EngineAction::Replace {
             delete_graphemes,
             text,
-        } => {
-            if *delete_graphemes > 0 {
-                injector.delete_previous_graphemes(*delete_graphemes)?;
-            }
-            if text.is_empty() {
-                Ok(())
-            } else {
-                injector.insert_text(text)
-            }
-        }
+        } => injector.replace_text(*delete_graphemes, text),
     }
 }
 
@@ -62,14 +64,7 @@ pub fn execute_observed_engine_action(
         EngineAction::Commit(text) => {
             let total_delete =
                 observed_inserted_graphemes.saturating_sub(observed_deleted_graphemes);
-            if total_delete > 0 {
-                injector.delete_previous_graphemes(total_delete)?;
-            }
-            if text.is_empty() {
-                Ok(())
-            } else {
-                injector.insert_text(text)
-            }
+            injector.replace_text(total_delete, text)
         }
         EngineAction::Replace {
             delete_graphemes,
@@ -77,14 +72,7 @@ pub fn execute_observed_engine_action(
         } => {
             let total_delete = (delete_graphemes + observed_inserted_graphemes)
                 .saturating_sub(observed_deleted_graphemes);
-            if total_delete > 0 {
-                injector.delete_previous_graphemes(total_delete)?;
-            }
-            if text.is_empty() {
-                Ok(())
-            } else {
-                injector.insert_text(text)
-            }
+            injector.replace_text(total_delete, text)
         }
     }
 }
@@ -188,6 +176,24 @@ mod tests {
             action,
             MockAction::Delete(count) if *count > 1
         )));
+    }
+
+    #[test]
+    fn observed_shape_cancellation_keeps_the_trigger_character() {
+        let injector = type_observed_pipeline("tamaa", EngineConfig::default());
+
+        assert_eq!(injector.text, "tama");
+        assert!(injector.actions.windows(2).any(|actions| matches!(
+            actions,
+            [MockAction::Delete(3), MockAction::Insert(text)] if text == "ama"
+        )));
+    }
+
+    #[test]
+    fn observed_fast_muons_keeps_both_vowels() {
+        let injector = type_observed_pipeline("muoons", EngineConfig::default());
+
+        assert_eq!(injector.text, "muốn");
     }
 
     #[test]

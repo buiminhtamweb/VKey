@@ -31,6 +31,9 @@ show_help() {
     echo "  deps             Check native Linux dependencies"
     echo "  install-deps     Install native Linux dependencies with apt"
     echo "  help             Show this help message"
+    echo ""
+    echo "Starting an X11 keyboard command stops known competing Viet+ processes"
+    echo "for the current session because two global input methods cannot coexist."
 }
 
 require_linux() {
@@ -52,6 +55,37 @@ require_display() {
     fi
 }
 
+stop_conflicting_input_methods() {
+    local process_name
+    local stopped=false
+
+    for process_name in vietc-tray vietc-daemon; do
+        if pgrep -x "$process_name" >/dev/null 2>&1; then
+            warn "Stopping competing input method process: $process_name"
+            pkill -TERM -x "$process_name"
+            stopped=true
+        fi
+    done
+
+    if [ "$stopped" = false ]; then
+        return
+    fi
+
+    # Give the competing daemon a brief chance to release its virtual X11
+    # keyboard before VKey opens its own global observer.
+    for _attempt in {1..20}; do
+        if ! pgrep -x vietc-tray >/dev/null 2>&1 \
+            && ! pgrep -x vietc-daemon >/dev/null 2>&1; then
+            success "Competing Viet+ input method stopped for this session."
+            return
+        fi
+        sleep 0.05
+    done
+
+    error "Could not stop Viet+. Stop vietc-tray/vietc-daemon before running VKey."
+    exit 1
+}
+
 require_linux
 
 CMD="${1:-run}"
@@ -63,6 +97,7 @@ case "$CMD" in
     run)
         ensure_deps
         require_display
+        stop_conflicting_input_methods
         info "Starting VKey-rs on Linux..."
         export RUST_BACKTRACE=1
         export RUST_LOG="${RUST_LOG:-debug}"
@@ -71,6 +106,7 @@ case "$CMD" in
     kbd-debug)
         ensure_deps
         require_display
+        stop_conflicting_input_methods
         info "Starting keyboard-debug..."
         export RUST_BACKTRACE=1
         export RUST_LOG="${RUST_LOG:-debug}"
@@ -79,6 +115,7 @@ case "$CMD" in
     core-debug)
         ensure_deps
         require_display
+        stop_conflicting_input_methods
         info "Starting keyboard-core-debug..."
         export RUST_BACKTRACE=1
         export RUST_LOG="${RUST_LOG:-debug}"

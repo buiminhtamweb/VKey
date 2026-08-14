@@ -1,7 +1,5 @@
 //! Stateful raw-key and rendered-text composition buffer.
 
-use unicode_segmentation::UnicodeSegmentation;
-
 use crate::{config::InputMethod, telex, vni};
 
 #[derive(Debug, Default)]
@@ -13,10 +11,6 @@ pub(crate) struct CompositionBuffer {
 impl CompositionBuffer {
     pub(crate) fn rendered(&self) -> &str {
         &self.rendered
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.rendered.is_empty()
     }
 
     pub(crate) fn push(
@@ -41,16 +35,6 @@ impl CompositionBuffer {
         } else {
             transformed
         };
-    }
-
-    pub(crate) fn backspace(&mut self) {
-        let new_len = self
-            .rendered
-            .grapheme_indices(true)
-            .next_back()
-            .map_or(0, |(index, _)| index);
-        self.rendered.truncate(new_len);
-        self.raw.clone_from(&self.rendered);
     }
 
     pub(crate) fn clear(&mut self) {

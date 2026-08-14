@@ -48,6 +48,10 @@ impl InputEngine {
                 self.reset();
                 EngineAction::PassThrough
             }
+            key if is_composition_boundary(key) => {
+                self.reset();
+                EngineAction::PassThrough
+            }
             Key::Character(character) => {
                 let old = self.composition.rendered().to_owned();
                 self.composition.push(
@@ -67,14 +71,6 @@ impl InputEngine {
                 } else {
                     replacement(&old_conv, &new_conv)
                 }
-            }
-            Key::Backspace if !self.composition.is_empty() => {
-                let old = self.composition.rendered().to_owned();
-                self.composition.backspace();
-                let old_conv = crate::charset::convert(&old, self.config.charset);
-                let new_conv =
-                    crate::charset::convert(self.composition.rendered(), self.config.charset);
-                replacement(&old_conv, &new_conv)
             }
             _ => {
                 self.reset();
@@ -116,6 +112,26 @@ fn is_delimiter(character: char, method: InputMethod) -> bool {
         return false;
     }
     method != InputMethod::Vni || !matches!(character, '1'..='9')
+}
+
+fn is_composition_boundary(key: Key) -> bool {
+    matches!(
+        key,
+        Key::Backspace
+            | Key::Delete
+            | Key::Enter
+            | Key::Escape
+            | Key::Tab
+            | Key::Space
+            | Key::Left
+            | Key::Right
+            | Key::Up
+            | Key::Down
+            | Key::Home
+            | Key::End
+            | Key::PageUp
+            | Key::PageDown
+    )
 }
 
 fn replacement(old: &str, new: &str) -> EngineAction {

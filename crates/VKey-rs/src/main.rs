@@ -181,26 +181,13 @@ fn run_daemon(
     let mut config = initial_config;
     let mut engine = InputEngine::new(config.clone());
     let mut backend = X11KeyboardBackend::new()?;
+    let mut shortcut_state = ShortcutState::default();
     backend.start()?;
 
-    // Track modifiers state for quick-toggle hotkey
-    let mut ctrl_pressed = false;
-    let mut shift_pressed = false;
-    let mut alt_pressed = false;
-
     loop {
-        // Poll for configuration/command updates from GUI thread
-        while let Ok(msg) = rx.try_recv() {
-            match msg {
-                AppMessage::UpdateConfig(new_config) => {
-                    config = new_config;
-                    engine.set_config(config.clone());
-                }
-                AppMessage::Exit => {
-                    let _ = backend.stop();
-                    return Ok(());
-                }
-            }
+        if apply_daemon_messages(&rx, &mut config, &mut engine, &mut shortcut_state, &gui_tx) {
+            let _ = backend.stop();
+            return Ok(());
         }
 
         let event = match backend.next_event() {
@@ -214,44 +201,24 @@ fn run_daemon(
             }
         };
 
-        // Hotkey Toggle Detection: Ctrl+Shift or Alt+Z
-        let mut toggle_triggered = false;
-        match config.shortcut_key {
-            vietnamese_core::config::ShortcutKey::CtrlShift => match event.key {
-                vietnamese_core::Key::Control => {
-                    let pressed = event.state == vietnamese_core::KeyState::Press;
-                    if pressed && !ctrl_pressed && shift_pressed {
-                        toggle_triggered = true;
-                    }
-                    ctrl_pressed = pressed;
-                }
-                vietnamese_core::Key::Shift => {
-                    let pressed = event.state == vietnamese_core::KeyState::Press;
-                    if pressed && !shift_pressed && ctrl_pressed {
-                        toggle_triggered = true;
-                    }
-                    shift_pressed = pressed;
-                }
-                _ => {}
-            },
-            vietnamese_core::config::ShortcutKey::AltZ => match event.key {
-                vietnamese_core::Key::Alt => {
-                    let pressed = event.state == vietnamese_core::KeyState::Press;
-                    alt_pressed = pressed;
-                }
-                vietnamese_core::Key::Character('z') | vietnamese_core::Key::Character('Z')
-                    if event.state == vietnamese_core::KeyState::Press
-                        && (alt_pressed || event.modifiers.alt) =>
-                {
-                    toggle_triggered = true;
-                }
-                _ => {}
-            },
+        // A GUI update can arrive while the backend is blocked waiting for the
+        // next X11 event. Apply it before interpreting that event so a stale
+        // configuration cannot overwrite a just-triggered shortcut toggle.
+        if apply_daemon_messages(&rx, &mut config, &mut engine, &mut shortcut_state, &gui_tx) {
+            let _ = backend.stop();
+            return Ok(());
         }
+
+        let toggle_triggered = shortcut_state.update(config.shortcut_key, event);
 
         if toggle_triggered {
             config.enabled = !config.enabled;
             engine.set_config(config.clone());
+            info!(
+                enabled = config.enabled,
+                shortcut = ?config.shortcut_key,
+                "Keyboard shortcut toggled Vietnamese input"
+            );
 
             // Save toggled state to config storage
             config_store::save_config(&config);
@@ -274,9 +241,9 @@ fn run_daemon(
             #[cfg(target_os = "windows")]
             backend.decide(decision)?;
 
-            // On X11, keep the device frozen until injection is complete. XTest
-            // events bypass the passive grabs and preserve ordering with any
-            // physical keys queued behind the grab.
+            // On X11, the target already receives the physical key. Repair the
+            // observed text by deleting the raw grapheme(s) and queueing the
+            // replacement on the same X11 connection.
             #[cfg(target_os = "linux")]
             let observed_inserted_graphemes = observed_inserted_graphemes(event);
             #[cfg(target_os = "linux")]
@@ -302,12 +269,98 @@ fn run_daemon(
                 error!(error = %injection_error, "Text injection failed; composition reset");
             }
 
-            // X11 is released only after its replacement has been queued. Other
-            // non-Windows backends do not use the Windows hook handshake either.
+            // Non-Windows backends do not use the Windows hook handshake.
             #[cfg(not(target_os = "windows"))]
             backend.decide(decision)?;
         } else {
             backend.decide(decision)?;
+        }
+    }
+}
+
+fn apply_daemon_messages(
+    rx: &Receiver<AppMessage>,
+    config: &mut EngineConfig,
+    engine: &mut InputEngine,
+    shortcut_state: &mut ShortcutState,
+    gui_tx: &Sender<GuiMessage>,
+) -> bool {
+    while let Ok(msg) = rx.try_recv() {
+        match msg {
+            AppMessage::UpdateConfig(new_config) => {
+                if new_config.shortcut_key != config.shortcut_key {
+                    shortcut_state.reset();
+                }
+                *config = new_config;
+                engine.set_config(config.clone());
+
+                // The daemon owns the active configuration. Acknowledge every
+                // update so the settings window and Linux tray can converge on
+                // this exact state without sending it back to the daemon.
+                let _ = gui_tx.send(GuiMessage::StateChanged(config.clone()));
+            }
+            AppMessage::Exit => return true,
+        }
+    }
+
+    false
+}
+
+#[derive(Debug, Default)]
+struct ShortcutState {
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+    ctrl_shift_active: bool,
+}
+
+impl ShortcutState {
+    fn update(
+        &mut self,
+        shortcut: vietnamese_core::config::ShortcutKey,
+        event: vietnamese_core::KeyEvent,
+    ) -> bool {
+        self.apply_modifier_event(event);
+
+        // Ctrl+Shift is made only from explicit physical modifier events.
+        // Linux desktop layout switching can leave the XKB modifier snapshot
+        // latched even after both keys have been released.
+        let ctrl = self.ctrl;
+        let shift = self.shift;
+        let alt = self.alt || event.modifiers.alt;
+        let ctrl_shift_active = ctrl && shift;
+
+        let triggered = match shortcut {
+            vietnamese_core::config::ShortcutKey::CtrlShift => {
+                event.state == vietnamese_core::KeyState::Press
+                    && ctrl_shift_active
+                    && !self.ctrl_shift_active
+            }
+            vietnamese_core::config::ShortcutKey::AltZ => {
+                event.state == vietnamese_core::KeyState::Press
+                    && matches!(
+                        event.key,
+                        vietnamese_core::Key::Character('z') | vietnamese_core::Key::Character('Z')
+                    )
+                    && alt
+            }
+        };
+
+        self.ctrl_shift_active = ctrl_shift_active;
+        triggered
+    }
+
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    fn apply_modifier_event(&mut self, event: vietnamese_core::KeyEvent) {
+        let pressed = event.state == vietnamese_core::KeyState::Press;
+        match event.key {
+            vietnamese_core::Key::Control => self.ctrl = pressed,
+            vietnamese_core::Key::Shift => self.shift = pressed,
+            vietnamese_core::Key::Alt => self.alt = pressed,
+            _ => {}
         }
     }
 }
@@ -348,4 +401,162 @@ fn parse_options() -> Result<Option<Options>, String> {
 fn init_tracing() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(filter).try_init()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vietnamese_core::{Key, KeyEvent, KeyState, Modifiers, ShortcutKey};
+
+    fn event(key: Key, modifiers: Modifiers, state: KeyState) -> KeyEvent {
+        KeyEvent {
+            key,
+            modifiers,
+            state,
+        }
+    }
+
+    fn press(key: Key, modifiers: Modifiers) -> KeyEvent {
+        event(key, modifiers, KeyState::Press)
+    }
+
+    fn release(key: Key, modifiers: Modifiers) -> KeyEvent {
+        event(key, modifiers, KeyState::Release)
+    }
+
+    #[test]
+    fn ctrl_shift_shortcut_triggers_when_shift_arrives_second() {
+        let mut shortcuts = ShortcutState::default();
+
+        assert!(!shortcuts.update(
+            ShortcutKey::CtrlShift,
+            press(Key::Control, Modifiers::default())
+        ));
+        assert!(shortcuts.update(
+            ShortcutKey::CtrlShift,
+            press(Key::Shift, Modifiers::default())
+        ));
+        assert!(!shortcuts.update(
+            ShortcutKey::CtrlShift,
+            press(
+                Key::Character('x'),
+                Modifiers {
+                    ctrl: true,
+                    shift: true,
+                    ..Modifiers::default()
+                }
+            )
+        ));
+    }
+
+    #[test]
+    fn ctrl_shift_shortcut_triggers_when_control_arrives_second() {
+        let mut shortcuts = ShortcutState::default();
+
+        assert!(!shortcuts.update(
+            ShortcutKey::CtrlShift,
+            press(Key::Shift, Modifiers::default())
+        ));
+        assert!(shortcuts.update(
+            ShortcutKey::CtrlShift,
+            press(Key::Control, Modifiers::default())
+        ));
+    }
+
+    #[test]
+    fn ctrl_shift_shortcut_resets_after_modifier_release() {
+        let mut shortcuts = ShortcutState::default();
+
+        assert!(!shortcuts.update(
+            ShortcutKey::CtrlShift,
+            press(Key::Control, Modifiers::default())
+        ));
+        assert!(shortcuts.update(
+            ShortcutKey::CtrlShift,
+            press(Key::Shift, Modifiers::default())
+        ));
+        assert!(!shortcuts.update(
+            ShortcutKey::CtrlShift,
+            release(Key::Shift, Modifiers::default())
+        ));
+        assert!(shortcuts.update(
+            ShortcutKey::CtrlShift,
+            press(Key::Shift, Modifiers::default())
+        ));
+    }
+
+    #[test]
+    fn ctrl_shift_ignores_latched_xkb_modifiers_after_release() {
+        let mut shortcuts = ShortcutState::default();
+        let latched = Modifiers {
+            ctrl: true,
+            shift: true,
+            ..Modifiers::default()
+        };
+
+        assert!(!shortcuts.update(ShortcutKey::CtrlShift, press(Key::Control, latched)));
+        assert!(shortcuts.update(ShortcutKey::CtrlShift, press(Key::Shift, latched)));
+        assert!(!shortcuts.update(ShortcutKey::CtrlShift, release(Key::Shift, latched)));
+        assert!(!shortcuts.update(ShortcutKey::CtrlShift, release(Key::Control, latched)));
+
+        assert!(!shortcuts.update(ShortcutKey::CtrlShift, press(Key::Shift, latched)));
+        assert!(shortcuts.update(ShortcutKey::CtrlShift, press(Key::Control, latched)));
+    }
+
+    #[test]
+    fn daemon_config_update_is_acknowledged_without_changing_it() {
+        let (app_tx, app_rx) = mpsc::channel();
+        let (gui_tx, gui_rx) = mpsc::channel();
+        let mut config = EngineConfig::default();
+        let mut engine = InputEngine::new(config.clone());
+        let mut shortcuts = ShortcutState::default();
+        let mut expected = config.clone();
+        expected.enabled = false;
+        expected.shortcut_key = ShortcutKey::AltZ;
+
+        app_tx
+            .send(AppMessage::UpdateConfig(expected.clone()))
+            .unwrap();
+
+        assert!(!apply_daemon_messages(
+            &app_rx,
+            &mut config,
+            &mut engine,
+            &mut shortcuts,
+            &gui_tx,
+        ));
+        assert_eq!(config, expected);
+        assert_eq!(engine.config(), &expected);
+        assert!(matches!(
+            gui_rx.recv().unwrap(),
+            GuiMessage::StateChanged(received) if received == expected
+        ));
+    }
+
+    #[test]
+    fn alt_z_shortcut_requires_alt_and_accepts_uppercase_z() {
+        let mut shortcuts = ShortcutState::default();
+
+        assert!(!shortcuts.update(ShortcutKey::AltZ, press(Key::Alt, Modifiers::default())));
+        assert!(shortcuts.update(
+            ShortcutKey::AltZ,
+            press(Key::Character('z'), Modifiers::default())
+        ));
+        assert!(!shortcuts.update(ShortcutKey::AltZ, release(Key::Alt, Modifiers::default())));
+        assert!(shortcuts.update(
+            ShortcutKey::AltZ,
+            press(
+                Key::Character('Z'),
+                Modifiers {
+                    alt: true,
+                    shift: true,
+                    ..Modifiers::default()
+                }
+            )
+        ));
+        assert!(!ShortcutState::default().update(
+            ShortcutKey::AltZ,
+            press(Key::Character('z'), Modifiers::default())
+        ));
+    }
 }

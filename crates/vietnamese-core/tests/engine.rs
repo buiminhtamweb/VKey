@@ -28,6 +28,14 @@ fn apply_action(output: &mut String, action: EngineAction, passthrough: Option<c
     }
 }
 
+fn pop_grapheme(output: &mut String) {
+    let new_len = output
+        .grapheme_indices(true)
+        .next_back()
+        .map_or(0, |(index, _)| index);
+    output.truncate(new_len);
+}
+
 fn type_text_with_config(input: &str, config: EngineConfig) -> String {
     let mut engine = InputEngine::new(config);
     let mut output = String::new();
@@ -126,7 +134,7 @@ fn vni_shapes_and_tones() {
 }
 
 #[test]
-fn backspace_removes_composed_graphemes() {
+fn backspace_clears_composition_and_passes_through() {
     let mut engine = InputEngine::new(EngineConfig::default());
     let mut output = String::new();
     for character in "tieengs".chars() {
@@ -135,10 +143,50 @@ fn backspace_removes_composed_graphemes() {
     }
     assert_eq!(output, "tiếng");
 
-    for expected in ["tiến", "tiế", "ti"] {
-        let action = engine.process_key(KeyEvent::press(Key::Backspace));
-        apply_action(&mut output, action, None);
-        assert_eq!(output, expected);
+    assert_eq!(
+        engine.process_key(KeyEvent::press(Key::Backspace)),
+        EngineAction::PassThrough
+    );
+    assert_eq!(engine.current_text(), "");
+    pop_grapheme(&mut output);
+    assert_eq!(output, "tiến");
+
+    let action = engine.process_key(KeyEvent::character('s'));
+    apply_action(&mut output, action, Some('s'));
+    assert_eq!(output, "tiếns");
+}
+
+#[test]
+fn boundary_keys_clear_composition_memory() {
+    for key in [
+        Key::Space,
+        Key::Left,
+        Key::Right,
+        Key::Up,
+        Key::Down,
+        Key::Home,
+        Key::End,
+        Key::PageUp,
+        Key::PageDown,
+        Key::Delete,
+        Key::Backspace,
+    ] {
+        let mut engine = InputEngine::new(EngineConfig::default());
+        for character in "tam".chars() {
+            engine.process_key(KeyEvent::character(character));
+        }
+        assert_eq!(engine.current_text(), "tam");
+        assert_eq!(
+            engine.process_key(KeyEvent::press(key)),
+            EngineAction::PassThrough,
+            "key: {key:?}"
+        );
+        assert_eq!(engine.current_text(), "", "key: {key:?}");
+        assert_eq!(
+            engine.process_key(KeyEvent::character('a')),
+            EngineAction::PassThrough,
+            "key: {key:?}"
+        );
     }
 }
 
@@ -222,6 +270,7 @@ fn output_is_unicode_nfc() {
 fn test_telex_end_of_word_modifiers() {
     assert_eq!(type_text("tama"), "tâm");
     assert_eq!(type_text("tamaa"), "tama");
+    assert_eq!(type_text("muoons"), "muốn");
     assert_eq!(type_text("toto"), "tôt");
     assert_eq!(type_text("totos"), "tốt");
     assert_eq!(type_text("hopos"), "hốp");
