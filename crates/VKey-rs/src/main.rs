@@ -57,6 +57,25 @@ fn show_existing_window() {
 #[cfg(not(target_os = "windows"))]
 fn show_existing_window() {}
 
+#[cfg(target_os = "windows")]
+fn load_window_icon() -> Option<egui::IconData> {
+    let bytes = include_bytes!(env!("VKEY_APP_ICON_PNG_PATH"));
+    let image = image::load_from_memory(bytes).ok()?;
+    let rgba = image.into_rgba8();
+    let (width, height) = rgba.dimensions();
+
+    Some(egui::IconData {
+        rgba: rgba.into_raw(),
+        width,
+        height,
+    })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn load_window_icon() -> Option<egui::IconData> {
+    None
+}
+
 fn main() -> ExitCode {
     // Ensure only one instance of VKey is running
     let _instance_lock = match std::net::TcpListener::bind("127.0.0.1:58989") {
@@ -121,12 +140,17 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
         let (gui_tx, gui_rx) = mpsc::channel();
 
         // Run egui settings panel in the main thread
+        let mut viewport = egui::ViewportBuilder::default()
+            .with_title("VKey Settings")
+            .with_inner_size([350.0, 440.0])
+            .with_resizable(false)
+            .with_maximize_button(false);
+        if let Some(icon) = load_window_icon() {
+            viewport = viewport.with_icon(icon);
+        }
+
         let native_options = eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default()
-                .with_title("VKey Settings")
-                .with_inner_size([350.0, 440.0])
-                .with_resizable(false)
-                .with_maximize_button(false),
+            viewport,
             ..Default::default()
         };
 
