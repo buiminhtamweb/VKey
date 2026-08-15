@@ -46,20 +46,33 @@ fn try_stroke_d(output: &mut [char], character: char) -> bool {
     if !character.eq_ignore_ascii_case(&'d') {
         return false;
     }
-    let Some(previous) = output.last_mut() else {
+    let Some(last_index) = output.len().checked_sub(1) else {
         return false;
     };
-    if unicode::shape_of(*previous) == Some(Shape::Stroke) {
-        *previous = unicode::strip_shape(*previous);
+
+    // Accept a delayed second `d` after the rest of the syllable, for example
+    // `duocdwj` -> `được`, while retaining the usual adjacent `dd` behavior.
+    let target_index = if output
+        .first()
+        .is_some_and(|&c| unicode::plain_base(c) == Some('d'))
+    {
+        0
+    } else {
+        last_index
+    };
+    let target = &mut output[target_index];
+
+    if unicode::shape_of(*target) == Some(Shape::Stroke) {
+        *target = unicode::strip_shape(*target);
         false
-    } else if unicode::is_plain(*previous, 'd') {
-        let is_upper = previous.is_uppercase() || character.is_uppercase();
+    } else if unicode::is_plain(*target, 'd') {
+        let is_upper = target.is_uppercase() || character.is_uppercase();
         let char_to_shape = if is_upper {
-            previous.to_ascii_uppercase()
+            target.to_ascii_uppercase()
         } else {
-            previous.to_ascii_lowercase()
+            target.to_ascii_lowercase()
         };
-        *previous = unicode::apply_shape(char_to_shape, Shape::Stroke).expect("d supports stroke");
+        *target = unicode::apply_shape(char_to_shape, Shape::Stroke).expect("d supports stroke");
         true
     } else {
         false

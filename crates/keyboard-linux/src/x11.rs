@@ -48,8 +48,8 @@ mod platform {
         protocol::{
             Event,
             xinput::{
-                ConnectionExt as _, Device, EventMask, EventMode, GrabMode22, GrabOwner, GrabType,
-                KeyPressEvent, RawKeyPressEvent, XIEventMask,
+                ConnectionExt as _, Device, DeviceType, EventMask, EventMode, GrabMode22,
+                GrabOwner, GrabType, KeyPressEvent, RawKeyPressEvent, XIEventMask,
             },
             xproto::{self, ConnectionExt as _, GrabMode, GrabStatus},
             xtest::ConnectionExt as _,
@@ -72,6 +72,7 @@ mod platform {
     struct PendingEvent {
         device_id: u16,
         time: u32,
+        keycode: u8,
     }
 
     #[derive(Debug, Default)]
@@ -129,12 +130,13 @@ mod platform {
         keymap: xkb::Keymap,
         _context: xkb::Context,
         intercepted_keycodes: Vec<u8>,
-        #[allow(dead_code)]
+        grab_device_ids: Vec<u16>,
         grab_modifiers: Vec<u32>,
         injection_keycode: u8,
         injection_keysyms_per_keycode: u8,
         original_injection_mapping: Vec<u32>,
         current_injection_keysym: Option<u32>,
+        mapped_key_events_pending: bool,
         pending: Option<PendingEvent>,
         running: bool,
         xtest_device_ids: Vec<u16>,
@@ -149,6 +151,7 @@ mod platform {
                 .debug_struct("X11KeyboardBackend")
                 .field("root", &self.root)
                 .field("intercepted_keycodes", &self.intercepted_keycodes.len())
+                .field("grab_device_ids", &self.grab_device_ids)
                 .field("injection_keycode", &self.injection_keycode)
                 .field("has_pending_decision", &self.pending.is_some())
                 .field("running", &self.running)
@@ -265,17 +268,24 @@ mod platform {
                 "X11 input controller connected"
             );
             let mut xtest_device_ids = Vec::new();
+            let mut grab_device_ids = Vec::new();
             if let Ok(reply) = connection.xinput_xi_query_device(u16::from(Device::ALL)) {
                 if let Ok(reply_data) = reply.reply() {
                     for info in reply_data.infos {
-                        let name = String::from_utf8_lossy(&info.name).to_lowercase();
-                        if name.contains("xtest") {
+                        if device_name_is_xtest(&info.name) {
                             xtest_device_ids.push(info.deviceid);
+                        } else if should_grab_keyboard_device(info.type_, info.enabled, &info.name)
+                        {
+                            grab_device_ids.push(info.deviceid);
                         }
                     }
                 }
             }
-            debug!(?xtest_device_ids, "Identified XTEST virtual devices");
+            debug!(
+                ?xtest_device_ids,
+                ?grab_device_ids,
+                "Identified X11 keyboard devices"
+            );
 
             Ok(Self {
                 connection,
@@ -284,11 +294,13 @@ mod platform {
                 keymap,
                 _context: context,
                 intercepted_keycodes,
+                grab_device_ids,
                 grab_modifiers,
                 injection_keycode,
                 injection_keysyms_per_keycode,
                 original_injection_mapping: original_mapping,
                 current_injection_keysym: None,
+                mapped_key_events_pending: false,
                 pending: None,
                 running: false,
                 xtest_device_ids,
@@ -298,10 +310,25 @@ mod platform {
             })
         }
 
-        #[allow(dead_code)]
         fn grab_keys(&mut self) -> Result<()> {
+            let mut successful_grabs = 0_usize;
+            for &device_id in &self.grab_device_ids {
+                successful_grabs += self.grab_keys_for_device(device_id)?;
+            }
+            if successful_grabs == 0 {
+                return Err(KeyboardError::X11Protocol(
+                    "could not grab any key on a physical X11 keyboard".to_owned(),
+                ));
+            }
+            self.connection
+                .flush()
+                .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))?;
+            Ok(())
+        }
+
+        fn grab_keys_for_device(&self, device_id: u16) -> Result<usize> {
             let mask = vec![u32::from(XIEventMask::KEY_PRESS | XIEventMask::KEY_RELEASE)];
-            let mut grabbed = Vec::new();
+            let mut grabbed = 0_usize;
 
             for &keycode in &self.intercepted_keycodes {
                 let reply = self
@@ -311,7 +338,7 @@ mod platform {
                         self.root,
                         NONE,
                         u32::from(keycode),
-                        Device::ALL_MASTER,
+                        device_id,
                         GrabType::KEYCODE,
                         GrabMode22::SYNC,
                         GrabMode::ASYNC,
@@ -323,48 +350,75 @@ mod platform {
                     .reply()
                     .map_err(|error| KeyboardError::X11Protocol(error.to_string()))?;
 
-                if let Some(failure) = reply
+                for failure in reply
                     .modifiers
                     .iter()
-                    .find(|item| item.status != GrabStatus::SUCCESS)
+                    .filter(|item| item.status != GrabStatus::SUCCESS)
                 {
                     warn!(
+                        device_id,
                         keycode,
                         modifier_mask = format_args!("{:#x}", failure.modifiers),
                         status = ?failure.status,
                         "skipping X11 key grab already owned by the window manager"
                     );
-                    continue;
                 }
-                grabbed.push(keycode);
+                // XI2 returns only modifier combinations that failed. Any
+                // requested combination absent from this list was grabbed.
+                if reply.modifiers.len() < self.grab_modifiers.len() {
+                    grabbed += 1;
+                }
             }
-            self.intercepted_keycodes = grabbed;
-            self.connection
-                .flush()
-                .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))?;
-            Ok(())
+            Ok(grabbed)
         }
 
-        #[allow(dead_code)]
-        fn ungrab_keycodes(&self, keycodes: &[u8]) {
-            for &keycode in keycodes {
-                match self.connection.xinput_xi_passive_ungrab_device(
-                    self.root,
-                    u32::from(keycode),
-                    Device::ALL_MASTER,
-                    GrabType::KEYCODE,
-                    &self.grab_modifiers,
-                ) {
-                    Ok(cookie) => {
-                        if let Err(error) = cookie.check() {
-                            warn!(keycode, %error, "failed to remove passive X11 key grab");
+        fn ungrab_keycodes(&self) {
+            for &device_id in &self.grab_device_ids {
+                for &keycode in &self.intercepted_keycodes {
+                    match self.connection.xinput_xi_passive_ungrab_device(
+                        self.root,
+                        u32::from(keycode),
+                        device_id,
+                        GrabType::KEYCODE,
+                        &self.grab_modifiers,
+                    ) {
+                        Ok(cookie) => {
+                            if let Err(error) = cookie.check() {
+                                warn!(device_id, keycode, %error, "failed to remove passive X11 key grab");
+                            }
                         }
-                    }
-                    Err(error) => {
-                        warn!(keycode, %error, "failed to send passive X11 ungrab request");
+                        Err(error) => {
+                            warn!(device_id, keycode, %error, "failed to send passive X11 ungrab request");
+                        }
                     }
                 }
             }
+        }
+
+        fn refresh_grab_devices(&mut self) -> Result<()> {
+            let reply = self
+                .connection
+                .xinput_xi_query_device(u16::from(Device::ALL))
+                .map_err(|error| KeyboardError::X11Protocol(error.to_string()))?
+                .reply()
+                .map_err(|error| KeyboardError::X11Protocol(error.to_string()))?;
+            let current = reply
+                .infos
+                .into_iter()
+                .filter(|info| should_grab_keyboard_device(info.type_, info.enabled, &info.name))
+                .map(|info| info.deviceid)
+                .collect::<Vec<_>>();
+
+            for &device_id in &current {
+                if !self.grab_device_ids.contains(&device_id) {
+                    let grabbed = self.grab_keys_for_device(device_id)?;
+                    info!(device_id, grabbed, "grabbed newly attached X11 keyboard");
+                }
+            }
+            self.grab_device_ids = current;
+            self.connection
+                .flush()
+                .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))
         }
 
         fn decode(&mut self, event: &KeyPressEvent) -> Result<KeyEvent> {
@@ -516,16 +570,17 @@ mod platform {
         }
 
         fn queue_synthetic_key(&mut self, key: SyntheticKey) -> Result<()> {
-            let keycode = match key {
-                SyntheticKey::Direct(keycode) => keycode,
+            let (keycode, is_mapped) = match key {
+                SyntheticKey::Direct(keycode) => (keycode, false),
                 SyntheticKey::Mapped(keysym) => {
                     self.set_injection_keysym(keysym)?;
-                    self.injection_keycode
+                    (self.injection_keycode, true)
                 }
             };
             queue_fake_key_on(&self.connection, keycode)?;
             self.synthetic_key_presses_to_ignore.push_back(keycode);
             self.synthetic_key_releases_to_ignore.push_back(keycode);
+            self.mapped_key_events_pending |= is_mapped;
             Ok(())
         }
 
@@ -533,17 +588,41 @@ mod platform {
             if self.current_injection_keysym == Some(keysym) {
                 return Ok(());
             }
+            // The focused client resolves keycodes using its own cached keymap.
+            // Let it consume earlier XTEST events before this keycode is remapped.
+            self.settle_pending_mapped_keys()?;
             let keysyms = vec![keysym; usize::from(self.injection_keysyms_per_keycode)];
-            let _cookie = self
-                .connection
+            self.connection
                 .change_keyboard_mapping(
                     1,
                     self.injection_keycode,
                     self.injection_keysyms_per_keycode,
                     &keysyms,
                 )
+                .map_err(|error| KeyboardError::X11Protocol(error.to_string()))?
+                .check()
                 .map_err(|error| KeyboardError::X11Protocol(error.to_string()))?;
+            // The focused client must observe the new mapping before the
+            // reserved keycode is pressed. A flush only sends both requests;
+            // this round trip establishes the required server-side order.
+            self.connection
+                .sync()
+                .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))?;
             self.current_injection_keysym = Some(keysym);
+            Ok(())
+        }
+
+        fn settle_pending_mapped_keys(&mut self) -> Result<()> {
+            if !self.mapped_key_events_pending {
+                return Ok(());
+            }
+            self.connection
+                .sync()
+                .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))?;
+            // XSync only waits for the server. The target application needs a
+            // scheduling quantum to handle the queued key before the remap.
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            self.mapped_key_events_pending = false;
             Ok(())
         }
 
@@ -551,6 +630,7 @@ mod platform {
             if self.current_injection_keysym.is_none() {
                 return Ok(());
             }
+            self.settle_pending_mapped_keys()?;
             let _cookie = self
                 .connection
                 .change_keyboard_mapping(
@@ -584,6 +664,17 @@ mod platform {
                 self.injection_keycode,
             )
         }
+
+        fn allow_event(&self, pending: PendingEvent, mode: EventMode) -> Result<()> {
+            self.connection
+                .xinput_xi_allow_events(pending.time, pending.device_id, mode, 0, self.root)
+                .map_err(|error| KeyboardError::X11Protocol(error.to_string()))?
+                .check()
+                .map_err(|error| KeyboardError::X11Protocol(error.to_string()))?;
+            self.connection
+                .flush()
+                .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))
+        }
     }
 
     impl KeyboardBackend for X11KeyboardBackend {
@@ -591,14 +682,21 @@ mod platform {
             if self.running {
                 return Ok(());
             }
-            let masks = [EventMask {
-                deviceid: Device::ALL_MASTER.into(),
-                mask: vec![
-                    XIEventMask::RAW_KEY_PRESS
-                        | XIEventMask::RAW_KEY_RELEASE
-                        | XIEventMask::RAW_BUTTON_PRESS,
-                ],
-            }];
+            self.grab_keys()?;
+            let masks = [
+                EventMask {
+                    deviceid: Device::ALL_MASTER.into(),
+                    mask: vec![
+                        XIEventMask::RAW_KEY_PRESS
+                            | XIEventMask::RAW_KEY_RELEASE
+                            | XIEventMask::RAW_BUTTON_PRESS,
+                    ],
+                },
+                EventMask {
+                    deviceid: Device::ALL.into(),
+                    mask: vec![XIEventMask::HIERARCHY],
+                },
+            ];
             self.connection
                 .xinput_xi_select_events(self.root, &masks)
                 .map_err(|error| KeyboardError::X11Protocol(error.to_string()))?
@@ -610,7 +708,8 @@ mod platform {
             self.running = true;
             info!(
                 keycodes = self.intercepted_keycodes.len(),
-                "X11 keyboard observation started"
+                devices = self.grab_device_ids.len(),
+                "X11 keyboard interception started"
             );
             Ok(())
         }
@@ -619,22 +718,32 @@ mod platform {
             if !self.running {
                 return Ok(());
             }
-            let masks = [EventMask {
-                deviceid: Device::ALL_MASTER.into(),
-                mask: Vec::new(),
-            }];
+            let masks = [
+                EventMask {
+                    deviceid: Device::ALL_MASTER.into(),
+                    mask: Vec::new(),
+                },
+                EventMask {
+                    deviceid: Device::ALL.into(),
+                    mask: Vec::new(),
+                },
+            ];
             self.connection
                 .xinput_xi_select_events(self.root, &masks)
                 .map_err(|error| KeyboardError::X11Protocol(error.to_string()))?
                 .check()
                 .map_err(|error| KeyboardError::X11Protocol(error.to_string()))?;
+            if let Some(pending) = self.pending.take() {
+                let _ = self.allow_event(pending, EventMode::ASYNC_DEVICE);
+            }
+            self.ungrab_keycodes();
             self.connection
                 .flush()
                 .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))?;
             self.restore_injection_mapping()?;
             self.raw_modifiers.clear();
             self.running = false;
-            info!("X11 keyboard observation stopped");
+            info!("X11 keyboard interception stopped");
             Ok(())
         }
 
@@ -662,7 +771,10 @@ mod platform {
                             );
                             continue;
                         }
-                        return self.decode_raw(&event);
+                        let decoded = self.decode_raw(&event)?;
+                        if is_raw_only_key(decoded.key) {
+                            return Ok(decoded);
+                        }
                     }
                     Event::XinputRawKeyRelease(event) => {
                         if self.is_synthetic_event(event.deviceid, event.sourceid, event.detail) {
@@ -692,19 +804,31 @@ mod platform {
                             return Ok(boundary);
                         }
                     }
+                    Event::XinputHierarchy(_) => {
+                        self.refresh_grab_devices()?;
+                    }
                     Event::XinputKeyPress(event) => {
-                        if self.xtest_device_ids.contains(&event.deviceid)
-                            || self.xtest_device_ids.contains(&event.sourceid)
-                        {
-                            continue;
-                        }
-                        if event.detail == u32::from(self.injection_keycode) {
-                            continue;
-                        }
-                        self.pending = Some(PendingEvent {
+                        let pending = PendingEvent {
                             device_id: event.deviceid,
                             time: event.time,
-                        });
+                            keycode: u8::try_from(event.detail).map_err(|_| {
+                                KeyboardError::X11Protocol(format!(
+                                    "XInput2 returned invalid keycode {}",
+                                    event.detail
+                                ))
+                            })?,
+                        };
+                        if self.is_synthetic_event(event.deviceid, event.sourceid, event.detail) {
+                            self.allow_event(pending, EventMode::ASYNC_DEVICE)?;
+                            trace!(
+                                keycode = event.detail,
+                                device_id = event.deviceid,
+                                source_id = event.sourceid,
+                                "released synthetic event from X11 passive grab"
+                            );
+                            continue;
+                        }
+                        self.pending = Some(pending);
                         return match self.decode(&event) {
                             Ok(decoded) => Ok(decoded),
                             Err(error) => {
@@ -745,16 +869,7 @@ mod platform {
                 .take()
                 .ok_or(KeyboardError::NoPendingDecision)?;
 
-            let mode = EventMode::ASYNC_DEVICE;
-            let allow_result = self
-                .connection
-                .xinput_xi_allow_events(pending.time, pending.device_id, mode, 0, self.root)
-                .map_err(|error| KeyboardError::X11Protocol(error.to_string()))
-                .and_then(|cookie| {
-                    cookie
-                        .check()
-                        .map_err(|error| KeyboardError::X11Protocol(error.to_string()))
-                });
+            let allow_result = self.allow_event(pending, EventMode::ASYNC_DEVICE);
             if let Err(error) = allow_result {
                 if let Ok(cookie) = self.connection.xinput_xi_allow_events(
                     CURRENT_TIME,
@@ -767,9 +882,12 @@ mod platform {
                 }
                 return Err(error);
             }
-            self.connection
-                .flush()
-                .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))?;
+            if decision == KeyboardDecision::PassThrough {
+                self.queue_synthetic_key(SyntheticKey::Direct(pending.keycode))?;
+                self.connection
+                    .sync()
+                    .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))?;
+            }
             Ok(())
         }
 
@@ -847,13 +965,16 @@ mod platform {
     fn key_is_interceptable(raw_keysym: u32) -> bool {
         let keysym = Keysym::new(raw_keysym);
         if keysym.is_modifier_key() {
-            return is_supported_modifier_key(raw_keysym);
+            return false;
         }
         !matches!(key_from_keysym(raw_keysym), Key::Unknown | Key::F(_))
     }
 
-    fn is_supported_modifier_key(raw_keysym: u32) -> bool {
-        modifier_key_from_keysym(raw_keysym).is_some()
+    fn is_raw_only_key(key: Key) -> bool {
+        matches!(
+            key,
+            Key::Shift | Key::Control | Key::Alt | Key::Super | Key::CapsLock | Key::NumLock
+        )
     }
 
     fn modifier_key_from_keysym(raw_keysym: u32) -> Option<Key> {
@@ -992,6 +1113,16 @@ mod platform {
             || detail == u32::from(injection_keycode)
     }
 
+    fn device_name_is_xtest(name: &[u8]) -> bool {
+        String::from_utf8_lossy(name)
+            .to_ascii_lowercase()
+            .contains("xtest")
+    }
+
+    fn should_grab_keyboard_device(device_type: DeviceType, enabled: bool, name: &[u8]) -> bool {
+        enabled && device_type == DeviceType::SLAVE_KEYBOARD && !device_name_is_xtest(name)
+    }
+
     fn focused_window(connection: &XCBConnection) -> Result<Option<WindowId>> {
         let reply = connection
             .get_input_focus()
@@ -1106,6 +1237,30 @@ mod platform {
                 physical_source,
                 248,
                 248,
+            ));
+        }
+
+        #[test]
+        fn grabs_physical_keyboards_but_never_xtest_devices() {
+            assert!(should_grab_keyboard_device(
+                DeviceType::SLAVE_KEYBOARD,
+                true,
+                b"AT Translated Set 2 keyboard",
+            ));
+            assert!(!should_grab_keyboard_device(
+                DeviceType::SLAVE_KEYBOARD,
+                true,
+                b"Virtual core XTEST keyboard",
+            ));
+            assert!(!should_grab_keyboard_device(
+                DeviceType::SLAVE_KEYBOARD,
+                false,
+                b"Disconnected keyboard",
+            ));
+            assert!(!should_grab_keyboard_device(
+                DeviceType::SLAVE_POINTER,
+                true,
+                b"Mouse",
             ));
         }
     }

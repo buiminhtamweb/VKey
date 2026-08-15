@@ -59,7 +59,6 @@ impl InputEngine {
                     self.config.input_method,
                     self.config.smart_tone,
                     self.config.restore_typing,
-                    self.config.spelling_check,
                 );
                 let new = self.composition.rendered();
 

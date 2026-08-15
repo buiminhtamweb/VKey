@@ -19,21 +19,11 @@ impl CompositionBuffer {
         method: InputMethod,
         smart_tone: bool,
         restore_typing: bool,
-        spelling_check: bool,
     ) {
         self.raw.push(character);
-        let transformed = match method {
+        self.rendered = match method {
             InputMethod::Telex => telex::transform(&self.raw, smart_tone, restore_typing),
             InputMethod::Vni => vni::transform(&self.raw, smart_tone, restore_typing),
-        };
-        self.rendered = if spelling_check
-            && transformed != self.raw
-            && !transformed.is_ascii()
-            && !crate::spelling::is_valid_vietnamese_syllable(&transformed)
-        {
-            self.raw.clone()
-        } else {
-            transformed
         };
     }
 

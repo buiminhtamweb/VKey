@@ -17,7 +17,7 @@ fn injects_unicode_into_an_opt_in_x11_target() {
     let mut injector = backend.text_injector();
     assert!(injector.current_target().expect("query focus").is_some());
     injector
-        .insert_text("Tiếng Việt — Đặng Nguyễn")
+        .insert_text("được được — Tiếng Việt — Đặng Nguyễn")
         .expect("inject Unicode through XTEST");
     injector
         .delete_previous_graphemes(6)

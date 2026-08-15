@@ -69,6 +69,8 @@ fn required_telex_words() {
         ("dd", "đ"),
         ("Dd", "Đ"),
         ("DD", "Đ"),
+        ("duocdwj", "được"),
+        ("Duocdwj", "Được"),
         ("aw", "ă"),
         ("aa", "â"),
         ("ee", "ê"),
@@ -283,14 +285,10 @@ fn test_telex_end_of_word_modifiers() {
 
 #[test]
 fn test_tone_toggling() {
-    let config_telex = EngineConfig {
-        spelling_check: false,
-        ..EngineConfig::default()
-    };
+    let config_telex = EngineConfig::default();
 
     let config_vni = EngineConfig {
         input_method: InputMethod::Vni,
-        spelling_check: false,
         ..EngineConfig::default()
     };
 
@@ -343,47 +341,4 @@ fn test_charsets() {
     );
     assert_eq!(type_text_with_config("dduongwf", config_tcvn3), "®õêng");
     assert_eq!(type_text_with_config("dduongwf", config_vni), "ñöôøng");
-}
-
-#[test]
-fn test_spelling_check() {
-    let config_spelling = EngineConfig {
-        spelling_check: true,
-        ..EngineConfig::default()
-    };
-
-    let config_no_spelling = EngineConfig {
-        spelling_check: false,
-        ..EngineConfig::default()
-    };
-
-    // 'tuyetf' has stop consonant 't' and grave tone 'f' which is invalid.
-    assert_eq!(
-        type_text_with_config("tuyetf", config_spelling.clone()),
-        "tuyetf"
-    );
-    assert_eq!(
-        type_text_with_config("tuyetf", config_no_spelling.clone()),
-        "tuyềt"
-    );
-
-    // 'tuyets' has stop consonant 't' and acute tone 's' which is valid.
-    assert_eq!(
-        type_text_with_config("tuyets", config_spelling.clone()),
-        "tuyết"
-    );
-    assert_eq!(
-        type_text_with_config("tuyets", config_no_spelling.clone()),
-        "tuyết"
-    );
-
-    // 'nghành' is invalid because 'ngh' must only stand before 'i', 'e', 'ê'.
-    assert_eq!(
-        type_text_with_config("nghanhf", config_spelling.clone()),
-        "nghanhf"
-    );
-    assert_eq!(
-        type_text_with_config("nghanhf", config_no_spelling.clone()),
-        "nghành"
-    );
 }

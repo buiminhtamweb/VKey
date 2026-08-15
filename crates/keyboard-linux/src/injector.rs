@@ -44,39 +44,6 @@ pub fn execute_engine_action(
     }
 }
 
-pub fn execute_observed_engine_action(
-    injector: &mut impl TextInjector,
-    action: &EngineAction,
-    observed_inserted_graphemes: usize,
-    observed_deleted_graphemes: usize,
-) -> Result<()> {
-    match action {
-        EngineAction::PassThrough => Ok(()),
-        EngineAction::Consume => {
-            let total_delete =
-                observed_inserted_graphemes.saturating_sub(observed_deleted_graphemes);
-            if total_delete > 0 {
-                injector.delete_previous_graphemes(total_delete)
-            } else {
-                Ok(())
-            }
-        }
-        EngineAction::Commit(text) => {
-            let total_delete =
-                observed_inserted_graphemes.saturating_sub(observed_deleted_graphemes);
-            injector.replace_text(total_delete, text)
-        }
-        EngineAction::Replace {
-            delete_graphemes,
-            text,
-        } => {
-            let total_delete = (delete_graphemes + observed_inserted_graphemes)
-                .saturating_sub(observed_deleted_graphemes);
-            injector.replace_text(total_delete, text)
-        }
-    }
-}
-
 #[must_use]
 pub const fn decision_for(action: &EngineAction) -> KeyboardDecision {
     KeyboardDecision::from_engine_action(action)
@@ -142,20 +109,6 @@ mod tests {
         injector
     }
 
-    fn type_observed_pipeline(input: &str, config: EngineConfig) -> MockTextInjector {
-        let mut engine = InputEngine::new(config);
-        let mut injector = MockTextInjector::default();
-
-        for character in input.chars() {
-            let action = engine.process_key(KeyEvent::character(character));
-            injector.text.push(character);
-            if decision_for(&action) == KeyboardDecision::Consume {
-                execute_observed_engine_action(&mut injector, &action, 1, 0).unwrap();
-            }
-        }
-        injector
-    }
-
     #[test]
     fn telex_sentence_reaches_the_target_without_raw_keystrokes() {
         let injector = type_through_pipeline("tieengs Vieejt!", EngineConfig::default());
@@ -168,32 +121,28 @@ mod tests {
     }
 
     #[test]
-    fn observed_telex_sentence_repairs_raw_keystrokes_in_target() {
-        let injector = type_observed_pipeline("tieengs Vieejt!", EngineConfig::default());
-
-        assert_eq!(injector.text, "tiếng Việt!");
-        assert!(injector.actions.iter().any(|action| matches!(
-            action,
-            MockAction::Delete(count) if *count > 1
-        )));
-    }
-
-    #[test]
-    fn observed_shape_cancellation_keeps_the_trigger_character() {
-        let injector = type_observed_pipeline("tamaa", EngineConfig::default());
+    fn intercepted_shape_cancellation_keeps_the_trigger_character() {
+        let injector = type_through_pipeline("tamaa", EngineConfig::default());
 
         assert_eq!(injector.text, "tama");
         assert!(injector.actions.windows(2).any(|actions| matches!(
             actions,
-            [MockAction::Delete(3), MockAction::Insert(text)] if text == "ama"
+            [MockAction::Delete(2), MockAction::Insert(text)] if text == "ama"
         )));
     }
 
     #[test]
-    fn observed_fast_muons_keeps_both_vowels() {
-        let injector = type_observed_pipeline("muoons", EngineConfig::default());
+    fn intercepted_fast_muons_keeps_both_vowels() {
+        let injector = type_through_pipeline("muoons", EngineConfig::default());
 
         assert_eq!(injector.text, "muốn");
+    }
+
+    #[test]
+    fn intercepted_delayed_stroke_d_rewrites_the_syllable_start() {
+        let injector = type_through_pipeline("duocdwj", EngineConfig::default());
+
+        assert_eq!(injector.text, "được");
     }
 
     #[test]

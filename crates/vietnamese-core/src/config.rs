@@ -28,7 +28,6 @@ pub struct EngineConfig {
     pub restore_key: char,
     pub startup_with_system: bool,
     pub shortcut_key: ShortcutKey,
-    pub spelling_check: bool,
 }
 
 impl Default for EngineConfig {
@@ -42,7 +41,6 @@ impl Default for EngineConfig {
             restore_key: 'z',
             startup_with_system: false,
             shortcut_key: ShortcutKey::CtrlShift,
-            spelling_check: true,
         }
     }
 }

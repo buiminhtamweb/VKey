@@ -1184,22 +1184,6 @@ impl eframe::App for AppGui {
                             config_changed = true;
                         }
 
-                        let mut spelling_check = self.config.spelling_check;
-                        let sc_chk = ui.checkbox(
-                            &mut spelling_check,
-                            egui::RichText::new("Tự động sửa lỗi chính tả (Autocorrect)")
-                                .color(egui::Color32::BLACK),
-                        ).on_hover_text(
-                            "Tự động kiểm tra chính tả và chặn các dấu thanh hoặc mũ không hợp lệ trong tiếng Việt.\n\
-                             Ví dụ:\n\
-                             - Bật: Gõ 'tuyetf' -> 'tuyetf' (chặn dấu huyền trên phụ âm cuối 't')\n\
-                             - Tắt: Gõ 'tuyetf' -> 'tuyềt' (cho phép gõ dấu sai chính tả)"
-                        );
-                        if sc_chk.changed() {
-                            self.config.spelling_check = spelling_check;
-                            config_changed = true;
-                        }
-
                         if config_changed {
                             self.update_config(self.config.clone(), ctx);
                         }
