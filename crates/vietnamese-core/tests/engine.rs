@@ -116,6 +116,18 @@ fn regression_buif_is_bui_with_grave_tone() {
 }
 
 #[test]
+fn capitalized_word_does_not_keep_an_accidental_second_uppercase_letter() {
+    assert_eq!(type_text("HOcj"), "Học");
+    assert_eq!(type_vni("HO5c"), "Học");
+    assert_eq!(type_text("HỌc"), "Học");
+
+    assert_eq!(type_text("HOCJ"), "HỌC");
+    assert_eq!(type_vni("HO5C"), "HỌC");
+    assert_eq!(type_text("HỌC"), "HỌC");
+    assert_eq!(type_text("ĐắkLắk"), "ĐắkLắk");
+}
+
+#[test]
 fn vni_shapes_and_tones() {
     for (input, expected) in [
         ("tie6ng1", "tiếng"),

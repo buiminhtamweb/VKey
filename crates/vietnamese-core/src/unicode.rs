@@ -18,6 +18,53 @@ pub fn normalize_nfc(input: &str) -> String {
     input.nfc().collect()
 }
 
+/// Correct an accidentally extended initial uppercase run in a capitalized word.
+///
+/// Some keyboard paths can report the second letter as uppercase while Shift is
+/// being released, producing forms such as `HỌc`. A genuinely all-uppercase
+/// word remains unchanged, as does mixed case with a later uppercase boundary
+/// such as `ĐắkLắk`.
+pub(crate) fn normalize_capitalized_word_case(text: &mut String) {
+    let mut alphabetic_characters = text.chars().filter(|character| character.is_alphabetic());
+    let Some(first_character) = alphabetic_characters.next() else {
+        return;
+    };
+    if !first_character.is_uppercase() {
+        return;
+    }
+
+    let mut saw_extra_uppercase = false;
+    let mut saw_lowercase = false;
+    for character in alphabetic_characters {
+        if character.is_uppercase() {
+            if saw_lowercase {
+                return;
+            }
+            saw_extra_uppercase = true;
+        } else if character.is_lowercase() {
+            saw_lowercase = true;
+        }
+    }
+
+    if !saw_extra_uppercase || !saw_lowercase {
+        return;
+    }
+
+    let mut normalized = String::with_capacity(text.len());
+    let mut saw_first_alphabetic = false;
+    for character in text.chars() {
+        if character.is_alphabetic() && !saw_first_alphabetic {
+            saw_first_alphabetic = true;
+            normalized.push(character);
+        } else if saw_first_alphabetic && character.is_uppercase() {
+            normalized.extend(character.to_lowercase());
+        } else {
+            normalized.push(character);
+        }
+    }
+    *text = normalized;
+}
+
 pub(crate) fn tone_of(character: char) -> Option<Tone> {
     character.nfd().find_map(|mark| match mark {
         '\u{0301}' => Some(Tone::Acute),
