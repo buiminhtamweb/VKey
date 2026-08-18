@@ -38,7 +38,12 @@ fn key_from_keysym(raw_keysym: u32) -> Key {
 
 #[cfg(target_os = "linux")]
 mod platform {
-    use std::{collections::VecDeque, env, mem};
+    use std::{
+        collections::VecDeque,
+        env, mem,
+        os::fd::AsRawFd,
+        time::{Duration, Instant},
+    };
 
     use tracing::{debug, info, trace, warn};
     use vietnamese_core::{Key, KeyEvent, KeyState, Modifiers};
@@ -49,8 +54,9 @@ mod platform {
             Event,
             xinput::{
                 ConnectionExt as _, Device, DeviceType, EventMask, EventMode, GrabMode22,
-                GrabOwner, GrabType, KeyPressEvent, RawKeyPressEvent, XIEventMask,
+                GrabOwner, GrabType, InputStateData, KeyPressEvent, RawKeyPressEvent, XIEventMask,
             },
+            xkb::{ConnectionExt as _, ID as XkbDeviceId},
             xproto::{self, ConnectionExt as _, GrabMode, GrabStatus},
             xtest::ConnectionExt as _,
         },
@@ -67,12 +73,14 @@ mod platform {
     const REQUESTED_XI_MINOR: u16 = 2;
     const REQUESTED_XTEST_MAJOR: u8 = 2;
     const REQUESTED_XTEST_MINOR: u16 = 1;
+    const EVENT_WAIT_TIMEOUT: Duration = Duration::from_millis(50);
 
     #[derive(Debug, Clone, Copy)]
     struct PendingEvent {
         device_id: u16,
         time: u32,
         keycode: u8,
+        passthrough_keysym: Option<u32>,
     }
 
     #[derive(Debug, Default)]
@@ -143,6 +151,8 @@ mod platform {
         synthetic_key_presses_to_ignore: VecDeque<u8>,
         synthetic_key_releases_to_ignore: VecDeque<u8>,
         raw_modifiers: RawModifierState,
+        pressed_shift_keys: Vec<(u16, u8)>,
+        last_base_shift: Option<bool>,
     }
 
     impl std::fmt::Debug for X11KeyboardBackend {
@@ -307,6 +317,8 @@ mod platform {
                 synthetic_key_presses_to_ignore: VecDeque::new(),
                 synthetic_key_releases_to_ignore: VecDeque::new(),
                 raw_modifiers: RawModifierState::default(),
+                pressed_shift_keys: Vec::new(),
+                last_base_shift: None,
             })
         }
 
@@ -428,24 +440,264 @@ mod platform {
                     event.detail
                 ))
             })?;
+            let event_base_shift =
+                modifier_is_active(&self.keymap, xkb::MOD_NAME_SHIFT, event.mods.base);
+            let had_tracked_shift = !self.raw_modifiers.shift.is_empty();
+            let mut shift_held = self.reconcile_shift_with_physical_devices();
+            let released_stale_shift = had_tracked_shift && !shift_held;
+            let hidden_shift_press = !shift_held
+                && !released_stale_shift
+                && event_base_shift
+                && match self.last_base_shift {
+                    Some(previous) => !previous,
+                    None => self.device_shift_is_held(event.sourceid).unwrap_or(true),
+                };
+            if hidden_shift_press {
+                self.remember_grabbed_shift_press(event.sourceid);
+                shift_held = true;
+                debug!(
+                    device_id = event.sourceid,
+                    "recovered Shift press hidden by an active X11 grab"
+                );
+            }
+            let (base_mods, latched_mods) =
+                self.normalize_stale_shift_state(event.mods.base, event.mods.latched, shift_held);
+            self.last_base_shift = Some(modifier_is_active(
+                &self.keymap,
+                xkb::MOD_NAME_SHIFT,
+                base_mods,
+            ));
             self.state.update_mask(
-                event.mods.base,
-                event.mods.latched,
+                base_mods,
+                latched_mods,
                 event.mods.locked,
                 u32::from(event.group.base),
                 u32::from(event.group.latched),
                 u32::from(event.group.locked),
             );
-            let keysym = self
-                .state
-                .key_get_one_sym(xkb::Keycode::new(keycode.into()));
-            let decoded = KeyEvent::press(key_from_keysym(keysym.raw()));
+            let key = self.raw_key_for_keycode(keycode);
+            if hidden_shift_press {
+                if let (Some(pending), Key::Character(character)) = (self.pending.as_mut(), key) {
+                    pending.passthrough_keysym = Some(Keysym::from_char(character).raw());
+                }
+            }
+            let mut modifiers = self.modifiers(event.mods.effective);
+            // Desktop layout switching can leave Shift latched in the XKB
+            // snapshot even after the physical key is released. Raw modifier
+            // tracking remains the authoritative source for what is held now.
+            self.raw_modifiers.apply_to(&mut modifiers);
+            let decoded = KeyEvent::press(key);
             let decoded = KeyEvent {
-                modifiers: self.modifiers(event.mods.effective),
+                modifiers,
                 ..decoded
             };
-            debug!(?decoded, keycode, "captured X11 key event");
+            debug!(
+                ?decoded,
+                keycode,
+                base_mods = format_args!("{:#x}", event.mods.base),
+                latched_mods = format_args!("{:#x}", event.mods.latched),
+                locked_mods = format_args!("{:#x}", event.mods.locked),
+                effective_mods = format_args!("{:#x}", event.mods.effective),
+                "captured X11 key event"
+            );
             Ok(decoded)
+        }
+
+        fn normalize_stale_shift_state(
+            &mut self,
+            mut base_mods: u32,
+            mut latched_mods: u32,
+            shift_held: bool,
+        ) -> (u32, u32) {
+            let modifier_index = self.keymap.mod_get_index(xkb::MOD_NAME_SHIFT);
+
+            if let Some(mask) = stale_modifier_mask(modifier_index, base_mods, shift_held) {
+                match self.release_stale_shift_keys() {
+                    Ok(()) => base_mods &= !u32::from(mask),
+                    Err(error) => warn!(%error, "failed to release stale X11 Shift state"),
+                }
+            }
+
+            let Some(mask) = stale_modifier_mask(modifier_index, latched_mods, shift_held) else {
+                return (base_mods, latched_mods);
+            };
+
+            let clear_result = self
+                .connection
+                .xkb_latch_lock_state(
+                    XkbDeviceId::USE_CORE_KBD.into(),
+                    xproto::ModMask::default(),
+                    xproto::ModMask::default(),
+                    false,
+                    0_u8.into(),
+                    mask.into(),
+                    false,
+                    0,
+                )
+                .map_err(|error| error.to_string())
+                .and_then(|cookie| cookie.check().map_err(|error| error.to_string()));
+
+            match clear_result {
+                Ok(()) => {
+                    debug!(
+                        modifier_mask = format_args!("{mask:#x}"),
+                        "cleared stale X11 Shift latch"
+                    );
+                    latched_mods &= !u32::from(mask);
+                }
+                Err(error) => {
+                    warn!(%error, "failed to clear stale X11 Shift latch");
+                }
+            }
+            (base_mods, latched_mods)
+        }
+
+        fn release_stale_shift_keys(&mut self) -> Result<()> {
+            let keycodes = modifier_keycodes(&self.keymap, Key::Shift);
+            for &keycode in &keycodes {
+                self.queue_synthetic_release(keycode)?;
+            }
+            self.connection
+                .sync()
+                .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))?;
+            debug!(?keycodes, "released stale X11 Shift key state");
+            Ok(())
+        }
+
+        fn repair_stale_shift_state_on_shutdown(&mut self) {
+            let state = self
+                .connection
+                .xkb_get_state(XkbDeviceId::USE_CORE_KBD.into())
+                .map_err(|error| error.to_string())
+                .and_then(|cookie| cookie.reply().map_err(|error| error.to_string()));
+            let state = match state {
+                Ok(state) => state,
+                Err(error) => {
+                    warn!(%error, "failed to query XKB state during shutdown");
+                    return;
+                }
+            };
+            let shift_held = self
+                .physical_shift_is_held()
+                .unwrap_or(!self.raw_modifiers.shift.is_empty());
+            self.normalize_stale_shift_state(
+                state.base_mods.into(),
+                state.latched_mods.into(),
+                shift_held,
+            );
+        }
+
+        fn physical_shift_is_held(&self) -> Option<bool> {
+            let shift_keycodes = modifier_keycodes(&self.keymap, Key::Shift);
+            let mut queried_keyboard = false;
+
+            for &device_id in &self.grab_device_ids {
+                let Ok(device_id) = u8::try_from(device_id) else {
+                    continue;
+                };
+                let reply = match self.connection.xinput_query_device_state(device_id) {
+                    Ok(cookie) => match cookie.reply() {
+                        Ok(reply) => reply,
+                        Err(error) => {
+                            warn!(device_id, %error, "failed to read physical keyboard state");
+                            continue;
+                        }
+                    },
+                    Err(error) => {
+                        warn!(device_id, %error, "failed to query physical keyboard state");
+                        continue;
+                    }
+                };
+
+                for class in reply.classes {
+                    let InputStateData::Key(key_state) = class.data else {
+                        continue;
+                    };
+                    queried_keyboard = true;
+                    if shift_keycodes
+                        .iter()
+                        .any(|keycode| keycode_is_pressed(&key_state.keys, *keycode))
+                    {
+                        return Some(true);
+                    }
+                }
+            }
+
+            queried_keyboard.then_some(false)
+        }
+
+        fn reconcile_shift_with_physical_devices(&mut self) -> bool {
+            if self.raw_modifiers.shift.is_empty() {
+                self.pressed_shift_keys.clear();
+                return false;
+            }
+            if self.pressed_shift_keys.is_empty() {
+                return true;
+            }
+
+            let tracked = self.pressed_shift_keys.clone();
+            let mut queried_device = false;
+            for &(device_id, keycode) in &tracked {
+                let Ok(device_id) = u8::try_from(device_id) else {
+                    continue;
+                };
+                let reply = match self.connection.xinput_query_device_state(device_id) {
+                    Ok(cookie) => match cookie.reply() {
+                        Ok(reply) => reply,
+                        Err(_) => continue,
+                    },
+                    Err(_) => continue,
+                };
+                for class in reply.classes {
+                    let InputStateData::Key(key_state) = class.data else {
+                        continue;
+                    };
+                    queried_device = true;
+                    if keycode_is_pressed(&key_state.keys, keycode) {
+                        return true;
+                    }
+                }
+            }
+
+            if queried_device {
+                self.raw_modifiers.shift.clear();
+                self.pressed_shift_keys.clear();
+                if let Err(error) = self.release_stale_shift_keys() {
+                    warn!(%error, "failed to publish recovered X11 Shift release");
+                }
+                debug!("reconciled released Shift hidden by an active X11 grab");
+                false
+            } else {
+                true
+            }
+        }
+
+        fn remember_grabbed_shift_press(&mut self, device_id: u16) {
+            for keycode in modifier_keycodes(&self.keymap, Key::Shift) {
+                self.raw_modifiers.press(keycode, Key::Shift);
+                remember_pressed_shift(&mut self.pressed_shift_keys, device_id, keycode);
+            }
+        }
+
+        fn device_shift_is_held(&self, device_id: u16) -> Option<bool> {
+            let device_id = u8::try_from(device_id).ok()?;
+            let reply = self
+                .connection
+                .xinput_query_device_state(device_id)
+                .ok()?
+                .reply()
+                .ok()?;
+            let shift_keycodes = modifier_keycodes(&self.keymap, Key::Shift);
+            reply.classes.into_iter().find_map(|class| {
+                let InputStateData::Key(key_state) = class.data else {
+                    return None;
+                };
+                Some(
+                    shift_keycodes
+                        .iter()
+                        .any(|keycode| keycode_is_pressed(&key_state.keys, *keycode)),
+                )
+            })
         }
 
         fn decode_raw(&mut self, event: &RawKeyPressEvent) -> Result<KeyEvent> {
@@ -456,10 +708,11 @@ mod platform {
                 ))
             })?;
             let xkb_keycode = xkb::Keycode::new(keycode.into());
-            let keysym = self.state.key_get_one_sym(xkb_keycode);
-            let key = modifier_key_for_keycode(&self.keymap, keycode)
-                .unwrap_or_else(|| key_from_keysym(keysym.raw()));
+            let key = self.raw_key_for_keycode(keycode);
             self.raw_modifiers.press(keycode, key);
+            if key == Key::Shift {
+                remember_pressed_shift(&mut self.pressed_shift_keys, event.sourceid, keycode);
+            }
             let mut modifiers = self.current_modifiers();
             self.raw_modifiers.apply_to(&mut modifiers);
             let decoded = KeyEvent::press(key);
@@ -472,6 +725,34 @@ mod platform {
             Ok(decoded)
         }
 
+        fn raw_key_for_keycode(&self, keycode: u8) -> Key {
+            if let Some(key) = modifier_key_for_keycode(&self.keymap, keycode) {
+                return key;
+            }
+
+            let xkb_keycode = xkb::Keycode::new(keycode.into());
+            let caps_lock = self
+                .state
+                .mod_name_is_active(xkb::MOD_NAME_CAPS, xkb::STATE_MODS_LOCKED);
+            let shift_held = !self.raw_modifiers.shift.is_empty();
+            let keysym = prefer_unshifted_keysym(
+                self.state.key_get_one_sym(xkb_keycode).raw(),
+                self.unshifted_keysym_for_keycode(xkb_keycode),
+                shift_held,
+                caps_lock,
+            );
+
+            key_from_keysym(keysym)
+        }
+
+        fn unshifted_keysym_for_keycode(&self, keycode: xkb::Keycode) -> Option<u32> {
+            let layout = self.state.key_get_layout(keycode);
+            self.keymap
+                .key_get_syms_by_level(keycode, layout, 0)
+                .first()
+                .map(|keysym| keysym.raw())
+        }
+
         fn decode_raw_release(&mut self, event: &RawKeyPressEvent) -> Result<Option<KeyEvent>> {
             let keycode = u8::try_from(event.detail).map_err(|_| {
                 KeyboardError::X11Protocol(format!(
@@ -482,6 +763,9 @@ mod platform {
             let key = modifier_key_for_keycode(&self.keymap, keycode);
             if let Some(key) = key {
                 self.raw_modifiers.release(keycode, key);
+                if key == Key::Shift {
+                    forget_pressed_shift(&mut self.pressed_shift_keys, event.sourceid, keycode);
+                }
             }
             self.state
                 .update_key(xkb::Keycode::new(keycode.into()), xkb::KeyDirection::Up);
@@ -496,6 +780,45 @@ mod platform {
                 state: KeyState::Release,
             };
             debug!(?decoded, keycode, "observed X11 raw modifier release");
+            Ok(Some(decoded))
+        }
+
+        fn decode_grabbed_modifier_release(
+            &mut self,
+            event: &KeyPressEvent,
+        ) -> Result<Option<KeyEvent>> {
+            let keycode = u8::try_from(event.detail).map_err(|_| {
+                KeyboardError::X11Protocol(format!(
+                    "XInput2 returned invalid release keycode {}",
+                    event.detail
+                ))
+            })?;
+            let Some(key) = modifier_key_for_keycode(&self.keymap, keycode) else {
+                return Ok(None);
+            };
+
+            self.raw_modifiers.release(keycode, key);
+            if key == Key::Shift {
+                forget_pressed_shift(&mut self.pressed_shift_keys, event.sourceid, keycode);
+            }
+            // If a modifier is released while another passively grabbed key
+            // is still down, XI2 delivers the release only to the grab owner.
+            // Publish the same release through XTEST so the focused client
+            // cannot retain a pressed modifier after VKey handled it.
+            self.queue_synthetic_release(keycode)?;
+            self.connection
+                .sync()
+                .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))?;
+            self.state
+                .update_key(xkb::Keycode::new(keycode.into()), xkb::KeyDirection::Up);
+            let mut modifiers = self.modifiers(event.mods.effective);
+            self.raw_modifiers.apply_to(&mut modifiers);
+            let decoded = KeyEvent {
+                key,
+                modifiers,
+                state: KeyState::Release,
+            };
+            debug!(?decoded, keycode, "observed X11 grabbed modifier release");
             Ok(Some(decoded))
         }
 
@@ -581,6 +904,23 @@ mod platform {
             self.synthetic_key_presses_to_ignore.push_back(keycode);
             self.synthetic_key_releases_to_ignore.push_back(keycode);
             self.mapped_key_events_pending |= is_mapped;
+            Ok(())
+        }
+
+        fn queue_synthetic_release(&mut self, keycode: u8) -> Result<()> {
+            let _cookie = self
+                .connection
+                .xtest_fake_input(
+                    xproto::KEY_RELEASE_EVENT,
+                    keycode,
+                    CURRENT_TIME,
+                    NONE,
+                    0,
+                    0,
+                    0,
+                )
+                .map_err(|error| KeyboardError::X11Protocol(error.to_string()))?;
+            self.synthetic_key_releases_to_ignore.push_back(keycode);
             Ok(())
         }
 
@@ -675,6 +1015,51 @@ mod platform {
                 .flush()
                 .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))
         }
+
+        fn wait_for_event_until(&self, deadline: Instant) -> Result<Option<Event>> {
+            loop {
+                if let Some(event) = self
+                    .connection
+                    .poll_for_event()
+                    .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))?
+                {
+                    return Ok(Some(event));
+                }
+
+                let now = Instant::now();
+                if now >= deadline {
+                    return Ok(None);
+                }
+                let timeout_ms = deadline
+                    .saturating_duration_since(now)
+                    .as_millis()
+                    .clamp(1, i32::MAX as u128) as i32;
+                let mut descriptor = libc::pollfd {
+                    fd: self.connection.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                // SAFETY: descriptor points to one initialized pollfd for the
+                // duration of this call, and the XCB connection owns the fd.
+                let ready = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
+                if ready < 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.kind() == std::io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    return Err(KeyboardError::ConnectionLost(error.to_string()));
+                }
+                if ready == 0 {
+                    return Ok(None);
+                }
+                if descriptor.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+                    return Err(KeyboardError::ConnectionLost(format!(
+                        "X11 connection poll failed with flags {:#x}",
+                        descriptor.revents
+                    )));
+                }
+            }
+        }
     }
 
     impl KeyboardBackend for X11KeyboardBackend {
@@ -718,6 +1103,9 @@ mod platform {
             if !self.running {
                 return Ok(());
             }
+            // Repair server-side modifier state before any fallible shutdown
+            // step so a normal exit cannot leave Shift depressed or latched.
+            self.repair_stale_shift_state_on_shutdown();
             let masks = [
                 EventMask {
                     deviceid: Device::ALL_MASTER.into(),
@@ -742,6 +1130,8 @@ mod platform {
                 .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))?;
             self.restore_injection_mapping()?;
             self.raw_modifiers.clear();
+            self.pressed_shift_keys.clear();
+            self.last_base_shift = None;
             self.running = false;
             info!("X11 keyboard interception stopped");
             Ok(())
@@ -751,13 +1141,11 @@ mod platform {
             if !self.running {
                 return Err(KeyboardError::NotRunning);
             }
+            let deadline = Instant::now() + EVENT_WAIT_TIMEOUT;
             loop {
-                let event = match self.connection.wait_for_event() {
-                    Ok(event) => event,
-                    Err(error) => {
-                        self.running = false;
-                        return Err(KeyboardError::ConnectionLost(error.to_string()));
-                    }
+                let event = match self.wait_for_event_until(deadline)? {
+                    Some(event) => event,
+                    None => return Err(KeyboardError::Timeout),
                 };
                 match event {
                     Event::XinputRawKeyPress(event) => {
@@ -817,6 +1205,7 @@ mod platform {
                                     event.detail
                                 ))
                             })?,
+                            passthrough_keysym: None,
                         };
                         if self.is_synthetic_event(event.deviceid, event.sourceid, event.detail) {
                             self.allow_event(pending, EventMode::ASYNC_DEVICE)?;
@@ -845,6 +1234,9 @@ mod platform {
                         }
                         if event.detail == u32::from(self.injection_keycode) {
                             continue;
+                        }
+                        if let Some(decoded) = self.decode_grabbed_modifier_release(&event)? {
+                            return Ok(decoded);
                         }
                         trace!(
                             keycode = event.detail,
@@ -883,7 +1275,10 @@ mod platform {
                 return Err(error);
             }
             if decision == KeyboardDecision::PassThrough {
-                self.queue_synthetic_key(SyntheticKey::Direct(pending.keycode))?;
+                let key = pending
+                    .passthrough_keysym
+                    .map_or(SyntheticKey::Direct(pending.keycode), SyntheticKey::Mapped);
+                self.queue_synthetic_key(key)?;
                 self.connection
                     .sync()
                     .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))?;
@@ -1001,6 +1396,21 @@ mod platform {
         None
     }
 
+    fn modifier_keycodes(keymap: &xkb::Keymap, target: Key) -> Vec<u8> {
+        let min = keymap.min_keycode().raw();
+        let max = keymap.max_keycode().raw();
+        (min..=max)
+            .filter_map(|raw| u8::try_from(raw).ok())
+            .filter(|keycode| modifier_key_for_keycode(keymap, *keycode) == Some(target))
+            .collect()
+    }
+
+    fn keycode_is_pressed(keys: &[u8; 32], keycode: u8) -> bool {
+        let byte = usize::from(keycode / 8);
+        let bit = keycode % 8;
+        keys[byte] & (1_u8 << bit) != 0
+    }
+
     fn remember_pressed_keycode(pressed: &mut Vec<u8>, keycode: u8) {
         if !pressed.contains(&keycode) {
             pressed.push(keycode);
@@ -1009,6 +1419,16 @@ mod platform {
 
     fn forget_pressed_keycode(pressed: &mut Vec<u8>, keycode: u8) {
         pressed.retain(|pressed_keycode| *pressed_keycode != keycode);
+    }
+
+    fn remember_pressed_shift(pressed: &mut Vec<(u16, u8)>, device_id: u16, keycode: u8) {
+        if !pressed.contains(&(device_id, keycode)) {
+            pressed.push((device_id, keycode));
+        }
+    }
+
+    fn forget_pressed_shift(pressed: &mut Vec<(u16, u8)>, device_id: u16, keycode: u8) {
+        pressed.retain(|pressed_key| *pressed_key != (device_id, keycode));
     }
 
     fn pointer_click_boundary(button: u32) -> Option<KeyEvent> {
@@ -1034,6 +1454,31 @@ mod platform {
     fn modifier_is_active(keymap: &xkb::Keymap, name: &str, effective: u32) -> bool {
         let index = keymap.mod_get_index(name);
         index != xkb::MOD_INVALID && index < u32::BITS && effective & (1_u32 << index) != 0
+    }
+
+    fn prefer_unshifted_keysym(
+        resolved_keysym: u32,
+        unshifted_keysym: Option<u32>,
+        shift_held: bool,
+        caps_lock: bool,
+    ) -> u32 {
+        if shift_held || caps_lock {
+            resolved_keysym
+        } else {
+            unshifted_keysym.unwrap_or(resolved_keysym)
+        }
+    }
+
+    fn stale_modifier_mask(
+        modifier_index: u32,
+        modifiers: u32,
+        physically_held: bool,
+    ) -> Option<u8> {
+        if physically_held || modifier_index >= u8::BITS {
+            return None;
+        }
+        let mask = 1_u8 << modifier_index;
+        (modifiers & u32::from(mask) != 0).then_some(mask)
     }
 
     /// Find the physical keycode for a keysym that is already mapped at layout 0, level 0.
@@ -1238,6 +1683,43 @@ mod platform {
                 248,
                 248,
             ));
+        }
+
+        #[test]
+        fn shiftless_raw_keys_prefer_the_unshifted_keysym() {
+            assert_eq!(
+                prefer_unshifted_keysym(key::A, Some(key::a), false, false),
+                key::a
+            );
+            assert_eq!(
+                prefer_unshifted_keysym(key::exclam, Some(key::_1), false, false),
+                key::_1
+            );
+            assert_eq!(
+                prefer_unshifted_keysym(key::A, Some(key::a), true, false),
+                key::A
+            );
+            assert_eq!(
+                prefer_unshifted_keysym(key::A, Some(key::a), false, true),
+                key::A
+            );
+            assert_eq!(prefer_unshifted_keysym(key::A, None, false, false), key::A);
+        }
+
+        #[test]
+        fn only_stale_physical_modifier_latches_are_cleared() {
+            assert_eq!(stale_modifier_mask(0, 0b0001, false), Some(1));
+            assert_eq!(stale_modifier_mask(0, 0b0001, true), None);
+            assert_eq!(stale_modifier_mask(0, 0, false), None);
+            assert_eq!(stale_modifier_mask(8, 0x100, false), None);
+        }
+
+        #[test]
+        fn physical_key_bitmap_uses_x11_keycode_bits() {
+            let mut keys = [0_u8; 32];
+            keys[6] = 0b0100_0000;
+            assert!(keycode_is_pressed(&keys, 54));
+            assert!(!keycode_is_pressed(&keys, 50));
         }
 
         #[test]

@@ -22,6 +22,7 @@ pub enum AppMessage {
 pub enum GuiMessage {
     StateChanged(EngineConfig),
     ShowSettingsWindow,
+    ExitRequested,
 }
 
 #[derive(Debug, Default)]
@@ -138,6 +139,8 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
 
         let (tx, rx) = mpsc::channel();
         let (gui_tx, gui_rx) = mpsc::channel();
+        let shutdown_tx = tx.clone();
+        let (daemon_handle_tx, daemon_handle_rx) = mpsc::sync_channel(1);
 
         // Run egui settings panel in the main thread
         let mut viewport = egui::ViewportBuilder::default()
@@ -154,7 +157,7 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
             ..Default::default()
         };
 
-        eframe::run_native(
+        let gui_result = eframe::run_native(
             "VKey Settings",
             native_options,
             Box::new(move |cc| {
@@ -171,16 +174,31 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                 let daemon_config = config.clone();
                 let ctx_clone = ctx.clone();
                 let gui_tx_clone = gui_tx.clone();
-                std::thread::spawn(move || {
-                    if let Err(error) = run_daemon(daemon_config, rx, gui_tx_clone, ctx_clone) {
+                let daemon_handle = std::thread::spawn(move || {
+                    let result = run_daemon(daemon_config, rx, gui_tx_clone, ctx_clone);
+                    if let Err(error) = &result {
                         error!("Daemon background thread error: {}", error);
                     }
+                    result
                 });
+                let _ = daemon_handle_tx.send(daemon_handle);
 
                 Ok(Box::new(gui::AppGui::new(config, tx, gui_rx, gui_tx, ctx)))
             }),
-        )
-        .map_err(|e| e.to_string().into())
+        );
+
+        // Always ask the daemon to stop and wait for its backend cleanup before
+        // returning from main. This keeps X11 modifier state from surviving a
+        // normal tray or settings-window exit.
+        let _ = shutdown_tx.send(AppMessage::Exit);
+        let daemon_result = daemon_handle_rx.recv().ok().map(|handle| handle.join());
+
+        gui_result.map_err(|error| error.to_string())?;
+        match daemon_result {
+            Some(Ok(result)) => result.map_err(|error| error.into()),
+            Some(Err(_)) => Err("keyboard daemon thread panicked during shutdown".into()),
+            None => Err("keyboard daemon did not start".into()),
+        }
     }
 }
 

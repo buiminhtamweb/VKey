@@ -94,6 +94,7 @@ pub struct AppGui {
     #[cfg(not(target_os = "linux"))]
     menu_vni_charset: MenuItem,
     window_visible: bool,
+    exit_requested: bool,
     shared_config: std::sync::Arc<std::sync::Mutex<EngineConfig>>,
     #[cfg(target_os = "linux")]
     tray_channel: Sender<EngineConfig>,
@@ -401,13 +402,15 @@ fn connect_linux_tray_handlers(
     });
 
     let tx_exit = tx.clone();
+    let gui_tx_exit = gui_tx.clone();
+    let ctx_exit = ctx.clone();
     let status_icon = controls.status_icon.clone();
     menu_exit.connect_activate(move |_| {
         hide_linux_status_icon(&status_icon);
         let _ = tx_exit.send(AppMessage::Exit);
+        let _ = gui_tx_exit.send(GuiMessage::ExitRequested);
+        ctx_exit.request_repaint_of(egui::ViewportId::ROOT);
         gtk::main_quit();
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        std::process::exit(0);
     });
 }
 
@@ -492,6 +495,7 @@ impl AppGui {
             tx,
             gui_rx,
             window_visible: true,
+            exit_requested: false,
             shared_config,
             tray_channel: tray_tx,
         }
@@ -716,8 +720,9 @@ impl AppGui {
 
                     if exit_app {
                         let _ = tx_clone.send(AppMessage::Exit);
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                        std::process::exit(0);
+                        let _ = gui_tx_clone.send(GuiMessage::ExitRequested);
+                        ctx_clone.request_repaint_of(egui::ViewportId::ROOT);
+                        break;
                     }
 
                     if changed {
@@ -786,8 +791,19 @@ impl AppGui {
             menu_tcvn3,
             menu_vni_charset,
             window_visible: true,
+            exit_requested: false,
             shared_config,
         }
+    }
+
+    fn request_exit(&mut self, ctx: &egui::Context) {
+        if self.exit_requested {
+            return;
+        }
+        self.exit_requested = true;
+        let _ = self.tx.send(AppMessage::Exit);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        ctx.request_repaint_of(egui::ViewportId::ROOT);
     }
 
     fn update_config(&mut self, new_config: EngineConfig, ctx: &egui::Context) {
@@ -914,11 +930,12 @@ impl eframe::App for AppGui {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 }
+                GuiMessage::ExitRequested => self.request_exit(ctx),
             }
         }
 
         // Hide window instead of closing the application when "X" is clicked
-        if ctx.input(|i| i.viewport().close_requested()) {
+        if ctx.input(|i| i.viewport().close_requested()) && !self.exit_requested {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.window_visible = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
@@ -1213,13 +1230,17 @@ impl eframe::App for AppGui {
                             .fill(egui::Color32::from_rgb(255, 230, 230)); // soft red outline button
 
                     if ui.add(exit_btn).clicked() {
-                        let _ = self.tx.send(AppMessage::Exit);
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                        std::process::exit(0);
+                        self.request_exit(ctx);
                     }
                 });
             });
         });
+    }
+}
+
+impl Drop for AppGui {
+    fn drop(&mut self) {
+        let _ = self.tx.send(AppMessage::Exit);
     }
 }
 

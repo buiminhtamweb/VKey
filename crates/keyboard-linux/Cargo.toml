@@ -12,6 +12,7 @@ vietnamese-core = { path = "../vietnamese-core" }
 xkeysym.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
+libc.workspace = true
 x11rb.workspace = true
 xkbcommon.workspace = true
 
@@ -25,4 +26,5 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [dev-dependencies]
+tracing-subscriber.workspace = true
 unicode-segmentation.workspace = true

@@ -23,11 +23,12 @@ thiserror = "2.0.19"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["ansi", "env-filter", "fmt"] }
 xkeysym = "0.2.1"
+libc = "0.2.189"
 
 [workspace.dependencies.x11rb]
 version = "0.14.0"
 default-features = false
-features = ["allow-unsafe-code", "xinput", "xtest"]
+features = ["allow-unsafe-code", "xinput", "xkb", "xtest"]
 
 [workspace.dependencies.xkbcommon]
 version = "0.9.0"

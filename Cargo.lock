@@ -2252,8 +2252,10 @@ dependencies = [
 name = "keyboard-linux"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "thiserror 2.0.19",
  "tracing",
+ "tracing-subscriber",
  "unicode-segmentation",
  "vietnamese-core",
  "windows-sys 0.59.0",
