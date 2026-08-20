@@ -1,0 +1,50 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run BE - Win",
+      "type": "shell",
+      "command": "go",
+      "args": [
+        "run",
+        "./"
+      ],
+      "options": {
+        "cwd": "D:\\VMA\\Quyen3\\be-quyen"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "run-all-win"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Run FE - Win",
+      "type": "shell",
+      "command": "npm",
+      "args": [
+        "run",
+        "dev"
+      ],
+      "options": {
+        "cwd": "D:\\VMA\\Quyen3\\fe-quyen"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "run-all-win"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Run All - Win",
+      "dependsOn": [
+        "Run BE - Win",
+        "Run FE - Win"
+      ],
+      "dependsOrder": "parallel",
+      "problemMatcher": []
+    }
+  ]
+}
