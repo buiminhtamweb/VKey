@@ -7,14 +7,16 @@ pushd "%ROOT%" >nul || exit /b 1
 set "RUN_CHECKS=1"
 set "RUN_BUILD=1"
 set "RUN_PACKAGE=1"
+set "RUN_MSI=1"
 set "FAIL_MESSAGE="
 
 :parse_args
 if "%~1"=="" goto args_done
 if /I "%~1"=="--quick" set "RUN_CHECKS=0" & shift & goto parse_args
 if /I "%~1"=="--no-check" set "RUN_CHECKS=0" & shift & goto parse_args
-if /I "%~1"=="--no-package" set "RUN_PACKAGE=0" & shift & goto parse_args
-if /I "%~1"=="--check-only" set "RUN_BUILD=0" & set "RUN_PACKAGE=0" & shift & goto parse_args
+if /I "%~1"=="--no-package" set "RUN_PACKAGE=0" & set "RUN_MSI=0" & shift & goto parse_args
+if /I "%~1"=="--no-msi" set "RUN_MSI=0" & shift & goto parse_args
+if /I "%~1"=="--check-only" set "RUN_BUILD=0" & set "RUN_PACKAGE=0" & set "RUN_MSI=0" & shift & goto parse_args
 if /I "%~1"=="-h" goto usage
 if /I "%~1"=="--help" goto usage
 set "FAIL_MESSAGE=Unknown option: %~1"
@@ -54,7 +56,7 @@ echo [build] Building release workspace
 set "FAIL_MESSAGE=cargo build failed"
 cargo build --workspace --release --all-features --locked || goto fail
 
-if "%RUN_PACKAGE%"=="0" (
+if "%RUN_PACKAGE%"=="0" if "%RUN_MSI%"=="0" (
     echo [done] Release binaries are in target\release\
     goto done
 )
@@ -62,6 +64,9 @@ if "%RUN_PACKAGE%"=="0" (
 set "DIST_DIR=%ROOT%\target\dist"
 set "PACKAGE_NAME=VKey-rs-%VERSION%-%OS_NAME%"
 set "PACKAGE_DIR=%DIST_DIR%\%PACKAGE_NAME%"
+set "MSI_NAME=VKey-%VERSION%-setup-x64.msi"
+set "MSI_ICON_NAME=vkey-setup.ico"
+set "WIX_BOOTSTRAP_DIR=%ROOT%\target\tools\wix314"
 
 if /I not "%DIST_DIR%"=="%ROOT%\target\dist" (
     set "FAIL_MESSAGE=Refusing to replace unexpected path: %DIST_DIR%"
@@ -69,43 +74,121 @@ if /I not "%DIST_DIR%"=="%ROOT%\target\dist" (
 )
 
 if exist "%DIST_DIR%" rmdir /s /q "%DIST_DIR%"
-mkdir "%PACKAGE_DIR%\bin" "%PACKAGE_DIR%\config" >nul 2>nul || (
-    set "FAIL_MESSAGE=Failed to create package directory"
+mkdir "%DIST_DIR%" >nul 2>nul || (
+    set "FAIL_MESSAGE=Failed to create dist directory"
     goto fail
 )
 
-for %%B in (VKey-rs VKey-core-test keyboard-debug keyboard-core-debug) do (
-    if not exist "%ROOT%\target\release\%%B%BIN_EXT%" (
-        set "FAIL_MESSAGE=Missing release binary: %ROOT%\target\release\%%B%BIN_EXT%"
-        goto fail
-    )
-    copy /y "%ROOT%\target\release\%%B%BIN_EXT%" "%PACKAGE_DIR%\bin\" >nul || (
-        set "FAIL_MESSAGE=Failed to copy %%B%BIN_EXT%"
+if "%RUN_PACKAGE%"=="1" (
+    mkdir "%PACKAGE_DIR%\bin" "%PACKAGE_DIR%\config" >nul 2>nul || (
+        set "FAIL_MESSAGE=Failed to create package directory"
         goto fail
     )
 )
 
-copy /y "%ROOT%\README.md" "%PACKAGE_DIR%\" >nul || (
-    set "FAIL_MESSAGE=Failed to copy README.md"
-    goto fail
+if "%RUN_PACKAGE%"=="1" (
+    for %%B in (VKey-rs VKey-core-test keyboard-debug keyboard-core-debug) do (
+        if not exist "%ROOT%\target\release\%%B%BIN_EXT%" (
+            set "FAIL_MESSAGE=Missing release binary: %ROOT%\target\release\%%B%BIN_EXT%"
+            goto fail
+        )
+        copy /y "%ROOT%\target\release\%%B%BIN_EXT%" "%PACKAGE_DIR%\bin\" >nul || (
+            set "FAIL_MESSAGE=Failed to copy %%B%BIN_EXT%"
+            goto fail
+        )
+    )
+
+    copy /y "%ROOT%\README.md" "%PACKAGE_DIR%\" >nul || (
+        set "FAIL_MESSAGE=Failed to copy README.md"
+        goto fail
+    )
+
+    powershell -NoProfile -Command "Copy-Item -Path 'config\*' -Destination '%PACKAGE_DIR%\config' -Recurse -Force" || (
+        set "FAIL_MESSAGE=Failed to copy config"
+        goto fail
+    )
+
+    for %%A in (vkey_icon_*.png vkey_logo_*.png) do (
+        if exist "%ROOT%\%%A" copy /y "%ROOT%\%%A" "%PACKAGE_DIR%\" >nul
+    )
+
+    powershell -NoProfile -Command "$archive = '%DIST_DIR%\%PACKAGE_NAME%.zip'; if (Test-Path $archive) { Remove-Item -Force $archive }; Compress-Archive -Path '%PACKAGE_DIR%\*' -DestinationPath $archive -Force" || (
+        set "FAIL_MESSAGE=Failed to create zip archive"
+        goto fail
+    )
+
+    echo [done] Package directory: %PACKAGE_DIR%
+    echo [done] Release archive: %DIST_DIR%\%PACKAGE_NAME%.zip
 )
 
-powershell -NoProfile -Command "Copy-Item -Path 'config\*' -Destination '%PACKAGE_DIR%\config' -Recurse -Force" || (
-    set "FAIL_MESSAGE=Failed to copy config"
-    goto fail
-)
+if "%RUN_MSI%"=="1" (
+    where cargo-wix >nul 2>nul
+    if errorlevel 1 (
+        echo [build] Installing cargo-wix
+        set "FAIL_MESSAGE=Failed to install cargo-wix"
+        cargo install cargo-wix --locked || goto fail
+    )
 
-for %%A in (vkey_icon_*.png vkey_logo_*.png) do (
-    if exist "%ROOT%\%%A" copy /y "%ROOT%\%%A" "%PACKAGE_DIR%\" >nul
-)
+    set "HAS_WIX_TOOLSET="
+    set "WIX_BIN_PATH="
+    if defined WIX if exist "%WIX%\bin\candle.exe" if exist "%WIX%\bin\light.exe" (
+        set "WIX_BIN_PATH=%WIX%\bin"
+        set "HAS_WIX_TOOLSET=1"
+    )
+    if defined WIX if exist "%WIX%\candle.exe" if exist "%WIX%\light.exe" (
+        set "WIX_BIN_PATH=%WIX%"
+        set "HAS_WIX_TOOLSET=1"
+    )
+    if not defined HAS_WIX_TOOLSET (
+        where candle >nul 2>nul && where light >nul 2>nul && set "HAS_WIX_TOOLSET=1"
+    )
+    if not defined HAS_WIX_TOOLSET (
+        if exist "%WIX_BOOTSTRAP_DIR%\candle.exe" if exist "%WIX_BOOTSTRAP_DIR%\light.exe" (
+            set "WIX_BIN_PATH=%WIX_BOOTSTRAP_DIR%"
+            set "HAS_WIX_TOOLSET=1"
+        )
+    )
+    if not defined HAS_WIX_TOOLSET (
+        echo [build] Downloading portable WiX Toolset v3.14.1
+        set "FAIL_MESSAGE=Failed to download WiX Toolset v3.14.1"
+        powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\scripts\ensure-wix-toolset.ps1" -DestinationPath "%WIX_BOOTSTRAP_DIR%" || goto fail
+        set "WIX_BIN_PATH=%WIX_BOOTSTRAP_DIR%"
+        set "HAS_WIX_TOOLSET=1"
+    )
 
-powershell -NoProfile -Command "$archive = '%DIST_DIR%\%PACKAGE_NAME%.zip'; if (Test-Path $archive) { Remove-Item -Force $archive }; Compress-Archive -Path '%PACKAGE_DIR%\*' -DestinationPath $archive -Force" || (
-    set "FAIL_MESSAGE=Failed to create zip archive"
-    goto fail
-)
+    if not exist "%ROOT%\wix\main.wxs" (
+        set "FAIL_MESSAGE=Missing WiX source file: %ROOT%\wix\main.wxs"
+        goto fail
+    )
 
-echo [done] Package directory: %PACKAGE_DIR%
-echo [done] Release archive: %DIST_DIR%\%PACKAGE_NAME%.zip
+    set "MSI_ICON_SOURCE="
+    for %%A in ("%ROOT%\vkey_icon_*.png") do (
+        if exist "%%~fA" if not defined MSI_ICON_SOURCE set "MSI_ICON_SOURCE=%%~fA"
+    )
+    if not defined MSI_ICON_SOURCE (
+        for %%A in ("%ROOT%\vkey_logo_*.png") do (
+            if exist "%%~fA" if not defined MSI_ICON_SOURCE set "MSI_ICON_SOURCE=%%~fA"
+        )
+    )
+    if not defined MSI_ICON_SOURCE (
+        set "FAIL_MESSAGE=Missing icon asset: expected vkey_icon_*.png or vkey_logo_*.png in the workspace root"
+        goto fail
+    )
+
+    echo [build] Generating MSI icon
+    set "FAIL_MESSAGE=Failed to generate MSI icon"
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\scripts\generate-windows-icon.ps1" -InputPath "!MSI_ICON_SOURCE!" -OutputPath "%DIST_DIR%\%MSI_ICON_NAME%" || goto fail
+
+    echo [build] Building MSI installer
+    set "FAIL_MESSAGE=Failed to create MSI installer"
+    if defined WIX_BIN_PATH (
+        cargo wix --package VKey-rs --include "%ROOT%\wix\main.wxs" --bin-path "!WIX_BIN_PATH!" --no-build --target-bin-dir "%ROOT%\target\release" --output "%DIST_DIR%\%MSI_NAME%" --nocapture || goto fail
+    ) else (
+        cargo wix --package VKey-rs --include "%ROOT%\wix\main.wxs" --no-build --target-bin-dir "%ROOT%\target\release" --output "%DIST_DIR%\%MSI_NAME%" --nocapture || goto fail
+    )
+
+    echo [done] MSI installer: %DIST_DIR%\%MSI_NAME%
+)
 goto done
 
 :usage
@@ -116,8 +199,9 @@ echo.
 echo Options:
 echo   --quick         Skip fmt, clippy, and tests; build/package release directly
 echo   --no-check      Alias for --quick
-echo   --no-package    Build release binaries without creating an archive
-echo   --check-only    Run the complete validation suite without building a package
+echo   --no-package    Build release binaries without creating zip or MSI artifacts
+echo   --no-msi        Build the zip package only and skip the Windows MSI installer
+echo   --check-only    Run the complete validation suite without building artifacts
 echo   -h, --help      Show this help
 echo.
 echo Artifacts are written to target\dist\.

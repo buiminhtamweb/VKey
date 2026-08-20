@@ -120,6 +120,23 @@ Build release:
 build.bat
 ```
 
+This creates:
+
+- `target\dist\VKey-rs-<version>-windows.zip`
+- `target\dist\VKey-<version>-setup-x64.msi`
+
+The MSI installer adds Start Menu and Desktop shortcuts for `VKey`.
+Its default install location is `C:\Program Files\Vkey`.
+
+The MSI step uses an existing WiX Toolset v3 from `PATH` or the `WIX`
+environment variable when available. Otherwise, `build.bat` downloads the
+portable WiX Toolset v3.14.1 to `target\tools\wix314`. If you only need the
+`.zip` package, run:
+
+```bat
+build.bat --no-msi
+```
+
 ## English
 
 ### Introduction

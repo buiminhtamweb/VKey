@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="windows-1252"?>
+<?if $(sys.BUILDARCH) = x64 or $(sys.BUILDARCH) = arm64 ?>
+    <?define PlatformProgramFilesFolder = "ProgramFiles64Folder" ?>
+<?else ?>
+    <?define PlatformProgramFilesFolder = "ProgramFilesFolder" ?>
+<?endif ?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+    <Product
+        Id="*"
+        Name="VKey"
+        UpgradeCode="197D1A8D-D04E-42CC-9986-8AF8032504A3"
+        Manufacturer="VKey"
+        Language="1033"
+        Codepage="1252"
+        Version="$(var.Version)">
+        <Package
+            Id="*"
+            Keywords="Installer"
+            Description="VKey Vietnamese input method"
+            Manufacturer="VKey"
+            InstallerVersion="450"
+            Languages="1033"
+            Compressed="yes"
+            InstallScope="perMachine"
+            SummaryCodepage="1252" />
+
+        <MajorUpgrade
+            Schedule="afterInstallInitialize"
+            DowngradeErrorMessage="A newer version of [ProductName] is already installed. Setup will now exit." />
+
+        <Media Id="1" Cabinet="media1.cab" EmbedCab="yes" />
+        <Property Id="ARPHELPLINK" Value="https://github.com/buiminhtamweb/VKey" />
+        <Property Id="ARPPRODUCTICON" Value="ProductIcon" />
+        <Icon Id="ProductIcon" SourceFile="$(var.CargoTargetDir)\dist\vkey-setup.ico" />
+
+        <Directory Id="TARGETDIR" Name="SourceDir">
+            <Directory Id="$(var.PlatformProgramFilesFolder)">
+                <Directory Id="INSTALLFOLDER" Name="Vkey">
+                    <Component Id="MainExecutable" Guid="*">
+                        <File
+                            Id="VKeyExe"
+                            Name="VKey-rs.exe"
+                            DiskId="1"
+                            Source="$(var.CargoTargetBinDir)\VKey-rs.exe"
+                            KeyPath="yes" />
+                    </Component>
+                </Directory>
+            </Directory>
+
+            <Directory Id="CommonProgramsFolder">
+                <Directory Id="ApplicationProgramsFolder" Name="Vkey">
+                    <Component Id="StartMenuShortcut" Guid="8362CB26-5F79-4EA7-96B7-220A156C46FD">
+                        <Shortcut
+                            Id="ApplicationStartMenuShortcut"
+                            Name="VKey"
+                            Description="Launch VKey"
+                            Target="[INSTALLFOLDER]VKey-rs.exe"
+                            Icon="ProductIcon"
+                            IconIndex="0"
+                            WorkingDirectory="INSTALLFOLDER" />
+                        <RemoveFolder Id="RemoveApplicationProgramsFolder" On="uninstall" />
+                        <RegistryValue
+                            Root="HKLM"
+                            Key="Software\VKey"
+                            Name="StartMenuShortcutInstalled"
+                            Type="integer"
+                            Value="1"
+                            KeyPath="yes" />
+                    </Component>
+                </Directory>
+            </Directory>
+
+            <Directory Id="CommonDesktopFolder">
+                <Component Id="DesktopShortcut" Guid="E12F5867-A8CC-469D-AE71-06BCE8597256">
+                    <Shortcut
+                        Id="ApplicationDesktopShortcut"
+                        Name="VKey"
+                        Description="Launch VKey"
+                        Target="[INSTALLFOLDER]VKey-rs.exe"
+                        Icon="ProductIcon"
+                        IconIndex="0"
+                        WorkingDirectory="INSTALLFOLDER" />
+                    <RegistryValue
+                        Root="HKLM"
+                        Key="Software\VKey"
+                        Name="DesktopShortcutInstalled"
+                        Type="integer"
+                        Value="1"
+                        KeyPath="yes" />
+                    </Component>
+                </Directory>
+        </Directory>
+
+        <Feature
+            Id="ProductFeature"
+            Title="VKey"
+            Description="Installs the VKey desktop application."
+            Level="1"
+            Absent="disallow">
+            <ComponentRef Id="MainExecutable" />
+            <ComponentRef Id="StartMenuShortcut" />
+            <ComponentRef Id="DesktopShortcut" />
+        </Feature>
+
+        <UI>
+            <UIRef Id="WixUI_Minimal" />
+        </UI>
+    </Product>
+</Wix>

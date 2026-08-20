@@ -4,6 +4,17 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+description = "Vietnamese input method with GUI and tray icon for Windows and Linux X11."
+homepage = "https://github.com/buiminhtamweb/VKey"
+repository = "https://github.com/buiminhtamweb/VKey"
+readme = "../../README.md"
+default-run = "VKey-rs"
+
+[package.metadata.wix]
+upgrade-guid = "197D1A8D-D04E-42CC-9986-8AF8032504A3"
+path-guid = "66CCD63B-2609-4A1F-9D0F-8E72AFC665CE"
+license = false
+eula = false
 
 [dependencies]
 keyboard-linux = { path = "../keyboard-linux" }
