@@ -296,6 +296,21 @@ fn test_telex_end_of_word_modifiers() {
 }
 
 #[test]
+fn test_telex_uu_w() {
+    assert_eq!(type_text("uuw"), "ưu");
+    assert_eq!(type_text("uuww"), "uuw");
+    assert_eq!(type_text("uuws"), "ứu");
+    assert_eq!(type_text("muuw"), "mưu");
+    assert_eq!(type_text("muuws"), "mứu");
+    assert_eq!(type_text("luuw"), "lưu");
+    assert_eq!(type_text("cuuwf"), "cừu");
+    assert_eq!(type_text("tuuwj"), "tựu");
+    assert_eq!(type_text("khuuw"), "khưu");
+    assert_eq!(type_text("Uuw"), "Ưu");
+    assert_eq!(type_text("UUw"), "ƯU");
+}
+
+#[test]
 fn test_tone_toggling() {
     let config_telex = EngineConfig::default();
 

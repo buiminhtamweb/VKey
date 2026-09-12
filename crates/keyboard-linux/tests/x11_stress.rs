@@ -113,12 +113,16 @@ fn sustained_mixed_case_vietnamese_input_never_leaks_shift() {
             };
             let action = engine.process_key(event);
             let decision = decision_for(&action);
-            backend
-                .decide(decision)
-                .map_err(|error| error.to_string())?;
             if decision == KeyboardDecision::Consume {
                 let mut injector = backend.text_injector();
                 execute_engine_action(&mut injector, &action).map_err(|error| error.to_string())?;
+                backend
+                    .decide(decision)
+                    .map_err(|error| error.to_string())?;
+            } else {
+                backend
+                    .decide(decision)
+                    .map_err(|error| error.to_string())?;
             }
         }
 

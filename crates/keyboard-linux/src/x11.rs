@@ -78,7 +78,6 @@ mod platform {
     #[derive(Debug, Clone, Copy)]
     struct PendingEvent {
         device_id: u16,
-        time: u32,
         keycode: u8,
         passthrough_keysym: Option<u32>,
     }
@@ -144,7 +143,7 @@ mod platform {
         injection_keysyms_per_keycode: u8,
         original_injection_mapping: Vec<u32>,
         current_injection_keysym: Option<u32>,
-        mapped_key_events_pending: bool,
+        last_mapped_event_time: Option<Instant>,
         pending: Option<PendingEvent>,
         running: bool,
         xtest_device_ids: Vec<u16>,
@@ -310,7 +309,7 @@ mod platform {
                 injection_keysyms_per_keycode,
                 original_injection_mapping: original_mapping,
                 current_injection_keysym: None,
-                mapped_key_events_pending: false,
+                last_mapped_event_time: None,
                 pending: None,
                 running: false,
                 xtest_device_ids,
@@ -903,7 +902,9 @@ mod platform {
             queue_fake_key_on(&self.connection, keycode)?;
             self.synthetic_key_presses_to_ignore.push_back(keycode);
             self.synthetic_key_releases_to_ignore.push_back(keycode);
-            self.mapped_key_events_pending |= is_mapped;
+            if is_mapped {
+                self.last_mapped_event_time = Some(Instant::now());
+            }
             Ok(())
         }
 
@@ -942,27 +943,22 @@ mod platform {
                 .map_err(|error| KeyboardError::X11Protocol(error.to_string()))?
                 .check()
                 .map_err(|error| KeyboardError::X11Protocol(error.to_string()))?;
-            // The focused client must observe the new mapping before the
-            // reserved keycode is pressed. A flush only sends both requests;
-            // this round trip establishes the required server-side order.
-            self.connection
-                .sync()
-                .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))?;
             self.current_injection_keysym = Some(keysym);
             Ok(())
         }
 
         fn settle_pending_mapped_keys(&mut self) -> Result<()> {
-            if !self.mapped_key_events_pending {
+            let Some(sent_at) = self.last_mapped_event_time.take() else {
                 return Ok(());
+            };
+            let elapsed = sent_at.elapsed();
+            if elapsed < Duration::from_millis(3) {
+                let remaining = Duration::from_millis(3) - elapsed;
+                self.connection
+                    .sync()
+                    .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))?;
+                std::thread::sleep(remaining);
             }
-            self.connection
-                .sync()
-                .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))?;
-            // XSync only waits for the server. The target application needs a
-            // scheduling quantum to handle the queued key before the remap.
-            std::thread::sleep(std::time::Duration::from_millis(5));
-            self.mapped_key_events_pending = false;
             Ok(())
         }
 
@@ -1007,13 +1003,9 @@ mod platform {
 
         fn allow_event(&self, pending: PendingEvent, mode: EventMode) -> Result<()> {
             self.connection
-                .xinput_xi_allow_events(pending.time, pending.device_id, mode, 0, self.root)
-                .map_err(|error| KeyboardError::X11Protocol(error.to_string()))?
-                .check()
+                .xinput_xi_allow_events(CURRENT_TIME, pending.device_id, mode, 0, self.root)
                 .map_err(|error| KeyboardError::X11Protocol(error.to_string()))?;
-            self.connection
-                .flush()
-                .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))
+            Ok(())
         }
 
         fn wait_for_event_until(&self, deadline: Instant) -> Result<Option<Event>> {
@@ -1198,7 +1190,6 @@ mod platform {
                     Event::XinputKeyPress(event) => {
                         let pending = PendingEvent {
                             device_id: event.deviceid,
-                            time: event.time,
                             keycode: u8::try_from(event.detail).map_err(|_| {
                                 KeyboardError::X11Protocol(format!(
                                     "XInput2 returned invalid keycode {}",
@@ -1209,6 +1200,9 @@ mod platform {
                         };
                         if self.is_synthetic_event(event.deviceid, event.sourceid, event.detail) {
                             self.allow_event(pending, EventMode::ASYNC_DEVICE)?;
+                            self.connection.flush().map_err(|error| {
+                                KeyboardError::ConnectionLost(error.to_string())
+                            })?;
                             trace!(
                                 keycode = event.detail,
                                 device_id = event.deviceid,
@@ -1252,38 +1246,20 @@ mod platform {
             if !self.running {
                 return Err(KeyboardError::NotRunning);
             }
-            if self.pending.is_none() {
-                let _ = decision;
+            let Some(pending) = self.pending.take() else {
                 return Ok(());
-            }
-            let pending = self
-                .pending
-                .take()
-                .ok_or(KeyboardError::NoPendingDecision)?;
+            };
 
-            let allow_result = self.allow_event(pending, EventMode::ASYNC_DEVICE);
-            if let Err(error) = allow_result {
-                if let Ok(cookie) = self.connection.xinput_xi_allow_events(
-                    CURRENT_TIME,
-                    pending.device_id,
-                    EventMode::ASYNC_DEVICE,
-                    0,
-                    self.root,
-                ) {
-                    let _ = cookie.check();
-                }
-                return Err(error);
-            }
+            self.allow_event(pending, EventMode::ASYNC_DEVICE)?;
             if decision == KeyboardDecision::PassThrough {
                 let key = pending
                     .passthrough_keysym
                     .map_or(SyntheticKey::Direct(pending.keycode), SyntheticKey::Mapped);
                 self.queue_synthetic_key(key)?;
-                self.connection
-                    .sync()
-                    .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))?;
             }
-            Ok(())
+            self.connection
+                .flush()
+                .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))
         }
 
         fn is_running(&self) -> bool {

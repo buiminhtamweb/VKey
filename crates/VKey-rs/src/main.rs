@@ -274,9 +274,11 @@ fn run_daemon(
         let decision = decision_for(&action);
 
         if decision == KeyboardDecision::Consume {
-            // Resolve the synchronous platform hook before injecting text. On
-            // Linux this prevents the raw Telex/VNI key from racing ahead of
-            // its replacement; Windows has the same ordering requirement.
+            // A Windows low-level hook must receive the consume decision before
+            // SendInput runs. On Linux/X11, injecting text while the device is
+            // still frozen ensures rapid subsequent physical keys cannot race ahead
+            // of the replacement (e.g. preventing "bạn" from becoming "bnạ").
+            #[cfg(target_os = "windows")]
             backend.decide(decision)?;
 
             let result = {
@@ -287,6 +289,9 @@ fn run_daemon(
                 engine.reset();
                 error!(error = %injection_error, "Text injection failed; composition reset");
             }
+
+            #[cfg(not(target_os = "windows"))]
+            backend.decide(decision)?;
         } else {
             backend.decide(decision)?;
         }

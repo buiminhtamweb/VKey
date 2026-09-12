@@ -119,9 +119,10 @@ fn try_w_shape(output: &mut [char], character: char) -> bool {
         return false;
     }
 
-    // 1. Check for "uo" and "ua" sequences
+    // 1. Check for "uo", "ua", and "uu" sequences
     let mut found_uo = None;
     let mut found_ua = None;
+    let mut found_uu = None;
     if output.len() >= 2 {
         for i in 0..output.len() - 1 {
             let base_i = unicode::plain_base(output[i]);
@@ -131,6 +132,9 @@ fn try_w_shape(output: &mut [char], character: char) -> bool {
                 break;
             } else if base_i == Some('u') && base_next == Some('a') {
                 found_ua = Some(i);
+                break;
+            } else if base_i == Some('u') && base_next == Some('u') {
+                found_uu = Some(i);
                 break;
             }
         }
@@ -157,6 +161,19 @@ fn try_w_shape(output: &mut [char], character: char) -> bool {
             false
         } else {
             output[i] = unicode::apply_shape(u_char, Shape::Horn).unwrap();
+            true
+        }
+    } else if let Some(i) = found_uu {
+        let u_first = output[i];
+        let u_second = output[i + 1];
+        if unicode::shape_of(u_first) == Some(Shape::Horn)
+            || unicode::shape_of(u_second) == Some(Shape::Horn)
+        {
+            output[i] = unicode::strip_shape(u_first);
+            output[i + 1] = unicode::strip_shape(u_second);
+            false
+        } else {
+            output[i] = unicode::apply_shape(u_first, Shape::Horn).unwrap();
             true
         }
     } else {
