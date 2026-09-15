@@ -9,94 +9,20 @@ use gtk::{
     prelude::*,
 };
 use std::sync::mpsc::{Receiver, Sender};
-#[cfg(not(target_os = "linux"))]
-use tray_icon::{
-    TrayIcon, TrayIconBuilder,
-    menu::{Menu, MenuItem, Submenu},
-};
+
 use vietnamese_core::{Charset, EngineConfig, InputMethod};
 
 use crate::{AppMessage, GuiMessage};
 
-// Thread-safe wrapper for MenuItem to allow updating tray menu items from background threads on Windows
-#[cfg(not(target_os = "linux"))]
-struct SendMenuItem(MenuItem);
-#[cfg(not(target_os = "linux"))]
-unsafe impl Send for SendMenuItem {}
-#[cfg(not(target_os = "linux"))]
-unsafe impl Sync for SendMenuItem {}
 
-#[cfg(target_os = "windows")]
-fn force_show_window() {
-    unsafe {
-        let title: Vec<u16> = "VKey Settings\0".encode_utf16().collect();
-        let hwnd = windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW(
-            std::ptr::null(),
-            title.as_ptr(),
-        );
-        if hwnd != 0 {
-            windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
-                hwnd,
-                windows_sys::Win32::UI::WindowsAndMessaging::SW_RESTORE,
-            );
-            windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
-                hwnd,
-                windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOW,
-            );
-            windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
-        }
-    }
-}
-
-#[cfg(all(not(target_os = "windows"), not(target_os = "linux")))]
-fn force_show_window() {}
-
-#[cfg(not(target_os = "linux"))]
-impl std::ops::Deref for SendMenuItem {
-    type Target = MenuItem;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-// Thread-safe wrapper for TrayIcon to allow setting tray icons from background threads on Windows
-#[cfg(not(target_os = "linux"))]
-pub struct SendTrayIcon(TrayIcon);
-#[cfg(not(target_os = "linux"))]
-unsafe impl Send for SendTrayIcon {}
-#[cfg(not(target_os = "linux"))]
-unsafe impl Sync for SendTrayIcon {}
-
-#[cfg(not(target_os = "linux"))]
-impl std::ops::Deref for SendTrayIcon {
-    type Target = TrayIcon;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
 
 pub struct AppGui {
     config: EngineConfig,
     tx: Sender<AppMessage>,
     gui_rx: Receiver<GuiMessage>,
-    #[cfg(not(target_os = "linux"))]
-    tray_icon: Option<std::sync::Arc<SendTrayIcon>>,
-    #[cfg(not(target_os = "linux"))]
-    menu_enabled: MenuItem,
-    #[cfg(not(target_os = "linux"))]
-    menu_telex: MenuItem,
-    #[cfg(not(target_os = "linux"))]
-    menu_vni: MenuItem,
-    #[cfg(not(target_os = "linux"))]
-    menu_unicode: MenuItem,
-    #[cfg(not(target_os = "linux"))]
-    menu_tcvn3: MenuItem,
-    #[cfg(not(target_os = "linux"))]
-    menu_vni_charset: MenuItem,
     window_visible: bool,
     exit_requested: bool,
     shared_config: std::sync::Arc<std::sync::Mutex<EngineConfig>>,
-    #[cfg(target_os = "linux")]
     tray_channel: Sender<EngineConfig>,
 }
 
@@ -501,300 +427,6 @@ impl AppGui {
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
-    pub fn new(
-        config: EngineConfig,
-        tx: Sender<AppMessage>,
-        gui_rx: Receiver<GuiMessage>,
-        gui_tx: Sender<GuiMessage>,
-        ctx: egui::Context,
-    ) -> Self {
-        // 1. Create Tray Menu Items
-        let menu_enabled = MenuItem::with_id(
-            "enabled",
-            if config.enabled {
-                "✓ Bật tiếng Việt"
-            } else {
-                "  Bật tiếng Việt"
-            },
-            true,
-            None,
-        );
-        let menu_telex = MenuItem::with_id(
-            "method_telex",
-            if config.input_method == InputMethod::Telex {
-                "✓ Telex"
-            } else {
-                "  Telex"
-            },
-            true,
-            None,
-        );
-        let menu_vni = MenuItem::with_id(
-            "method_vni",
-            if config.input_method == InputMethod::Vni {
-                "✓ VNI"
-            } else {
-                "  VNI"
-            },
-            true,
-            None,
-        );
-        let menu_unicode = MenuItem::with_id(
-            "charset_unicode",
-            if config.charset == Charset::Unicode {
-                "✓ Unicode"
-            } else {
-                "  Unicode"
-            },
-            true,
-            None,
-        );
-        let menu_tcvn3 = MenuItem::with_id(
-            "charset_tcvn3",
-            if config.charset == Charset::Tcvn3 {
-                "✓ TCVN3 (ABC)"
-            } else {
-                "  TCVN3 (ABC)"
-            },
-            true,
-            None,
-        );
-        let menu_vni_charset = MenuItem::with_id(
-            "charset_vni",
-            if config.charset == Charset::Vni {
-                "✓ VNI Windows"
-            } else {
-                "  VNI Windows"
-            },
-            true,
-            None,
-        );
-
-        // Build Submenu for Input Methods
-        let method_submenu = Submenu::with_id("method", "Kiểu gõ", true);
-        method_submenu.append(&menu_telex).unwrap();
-        method_submenu.append(&menu_vni).unwrap();
-
-        // Build Submenu for Charsets
-        let charset_submenu = Submenu::with_id("charset", "Bảng mã", true);
-        charset_submenu.append(&menu_unicode).unwrap();
-        charset_submenu.append(&menu_tcvn3).unwrap();
-        charset_submenu.append(&menu_vni_charset).unwrap();
-
-        // Build Tray Menu
-        let tray_menu = Menu::new();
-        tray_menu.append(&menu_enabled).unwrap();
-        tray_menu.append(&method_submenu).unwrap();
-        tray_menu.append(&charset_submenu).unwrap();
-        tray_menu
-            .append(&MenuItem::with_id(
-                "settings",
-                "Hiển thị cài đặt",
-                true,
-                None,
-            ))
-            .unwrap();
-        tray_menu
-            .append(&MenuItem::with_id("exit", "Thoát", true, None))
-            .unwrap();
-
-        // 2. Create Tray Icon
-        let icon = generate_tray_icon(config.enabled);
-        let tray_icon = TrayIconBuilder::new()
-            .with_menu(Box::new(tray_menu))
-            .with_menu_on_left_click(false)
-            .with_tooltip("VKey - Bộ gõ Tiếng Việt")
-            .with_icon(icon)
-            .build()
-            .ok();
-
-        let tray_icon = tray_icon.map(|t| std::sync::Arc::new(SendTrayIcon(t)));
-
-        // 3. Shared thread-safe state for background tray thread
-        let shared_config = std::sync::Arc::new(std::sync::Mutex::new(config.clone()));
-        let shared_config_clone = shared_config.clone();
-
-        let tx_clone = tx.clone();
-        let gui_tx_clone = gui_tx.clone();
-        let ctx_clone = ctx.clone();
-
-        let menu_enabled_send = SendMenuItem(menu_enabled.clone());
-        let menu_telex_send = SendMenuItem(menu_telex.clone());
-        let menu_vni_send = SendMenuItem(menu_vni.clone());
-        let menu_unicode_send = SendMenuItem(menu_unicode.clone());
-        let menu_tcvn3_send = SendMenuItem(menu_tcvn3.clone());
-        let menu_vni_charset_send = SendMenuItem(menu_vni_charset.clone());
-        let shared_tray_clone = tray_icon.clone();
-
-        std::thread::spawn(move || {
-            let tray_event_receiver = tray_icon::TrayIconEvent::receiver();
-            let menu_event_receiver = tray_icon::menu::MenuEvent::receiver();
-            loop {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-
-                while let Ok(event) = tray_event_receiver.try_recv() {
-                    match event {
-                        tray_icon::TrayIconEvent::Click {
-                            button: tray_icon::MouseButton::Left,
-                            button_state: tray_icon::MouseButtonState::Up,
-                            ..
-                        }
-                        | tray_icon::TrayIconEvent::DoubleClick {
-                            button: tray_icon::MouseButton::Left,
-                            ..
-                        } => {
-                            let mut cfg = shared_config_clone.lock().unwrap().clone();
-                            cfg.enabled = !cfg.enabled;
-
-                            // Save to file
-                            crate::config_store::save_config(&cfg);
-                            // Notify background thread
-                            let _ = tx_clone.send(AppMessage::UpdateConfig(cfg.clone()));
-                            // Notify GUI thread
-                            let _ = gui_tx_clone.send(GuiMessage::StateChanged(cfg.clone()));
-                            // Update shared lock
-                            *shared_config_clone.lock().unwrap() = cfg.clone();
-                            // Update tray icon immediately
-                            if let Some(tray) = shared_tray_clone.as_ref() {
-                                let icon = generate_tray_icon(cfg.enabled);
-                                let _ = tray.set_icon(Some(icon));
-                            }
-
-                            // Synchronize tray menu checkmark immediately
-                            menu_enabled_send.set_text(if cfg.enabled {
-                                "✓ Bật tiếng Việt"
-                            } else {
-                                "  Bật tiếng Việt"
-                            });
-
-                            // Wake up winit to update GUI window immediately
-                            ctx_clone.request_repaint_of(egui::ViewportId::ROOT);
-                        }
-                        _ => {}
-                    }
-                }
-
-                if let Ok(event) = menu_event_receiver.try_recv() {
-                    let mut cfg = shared_config_clone.lock().unwrap().clone();
-                    let mut changed = false;
-                    let mut exit_app = false;
-
-                    match event.id.0.as_str() {
-                        "enabled" => {
-                            cfg.enabled = !cfg.enabled;
-                            changed = true;
-                        }
-                        "method_telex" => {
-                            cfg.input_method = InputMethod::Telex;
-                            changed = true;
-                        }
-                        "method_vni" => {
-                            cfg.input_method = InputMethod::Vni;
-                            changed = true;
-                        }
-                        "charset_unicode" => {
-                            cfg.charset = Charset::Unicode;
-                            changed = true;
-                        }
-                        "charset_tcvn3" => {
-                            cfg.charset = Charset::Tcvn3;
-                            changed = true;
-                        }
-                        "charset_vni" => {
-                            cfg.charset = Charset::Vni;
-                            changed = true;
-                        }
-                        "settings" => {
-                            let _ = gui_tx_clone.send(GuiMessage::ShowSettingsWindow);
-                            force_show_window();
-                            ctx_clone.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                            ctx_clone.send_viewport_cmd(egui::ViewportCommand::Focus);
-                            ctx_clone.request_repaint_of(egui::ViewportId::ROOT);
-                        }
-                        "exit" => {
-                            exit_app = true;
-                        }
-                        _ => {}
-                    }
-
-                    if exit_app {
-                        let _ = tx_clone.send(AppMessage::Exit);
-                        let _ = gui_tx_clone.send(GuiMessage::ExitRequested);
-                        ctx_clone.request_repaint_of(egui::ViewportId::ROOT);
-                        break;
-                    }
-
-                    if changed {
-                        // 1. Save to disk
-                        crate::config_store::save_config(&cfg);
-                        // 2. Notify keyboard daemon
-                        let _ = tx_clone.send(AppMessage::UpdateConfig(cfg.clone()));
-                        // 3. Update shared lock
-                        *shared_config_clone.lock().unwrap() = cfg.clone();
-                        // 4. Notify GUI thread directly
-                        let _ = gui_tx_clone.send(GuiMessage::StateChanged(cfg.clone()));
-
-                        // 5. Update tray menu checkmarks immediately
-                        menu_enabled_send.set_text(if cfg.enabled {
-                            "✓ Bật tiếng Việt"
-                        } else {
-                            "  Bật tiếng Việt"
-                        });
-                        menu_telex_send.set_text(if cfg.input_method == InputMethod::Telex {
-                            "✓ Telex"
-                        } else {
-                            "  Telex"
-                        });
-                        menu_vni_send.set_text(if cfg.input_method == InputMethod::Vni {
-                            "✓ VNI"
-                        } else {
-                            "  VNI"
-                        });
-                        menu_unicode_send.set_text(if cfg.charset == Charset::Unicode {
-                            "✓ Unicode"
-                        } else {
-                            "  Unicode"
-                        });
-                        menu_tcvn3_send.set_text(if cfg.charset == Charset::Tcvn3 {
-                            "✓ TCVN3 (ABC)"
-                        } else {
-                            "  TCVN3 (ABC)"
-                        });
-                        menu_vni_charset_send.set_text(if cfg.charset == Charset::Vni {
-                            "✓ VNI Windows"
-                        } else {
-                            "  VNI Windows"
-                        });
-
-                        // 6. Update tray icon immediately
-                        if let Some(tray) = shared_tray_clone.as_ref() {
-                            let icon = generate_tray_icon(cfg.enabled);
-                            let _ = tray.set_icon(Some(icon));
-                        }
-
-                        ctx_clone.request_repaint_of(egui::ViewportId::ROOT);
-                    }
-                }
-            }
-        });
-
-        Self {
-            config,
-            tx,
-            gui_rx,
-            tray_icon,
-            menu_enabled,
-            menu_telex,
-            menu_vni,
-            menu_unicode,
-            menu_tcvn3,
-            menu_vni_charset,
-            window_visible: true,
-            exit_requested: false,
-            shared_config,
-        }
-    }
 
     fn request_exit(&mut self, ctx: &egui::Context) {
         if self.exit_requested {
@@ -807,8 +439,6 @@ impl AppGui {
     }
 
     fn update_config(&mut self, new_config: EngineConfig, ctx: &egui::Context) {
-        #[cfg(not(target_os = "linux"))]
-        let old_enabled = self.config.enabled;
 
         self.config = new_config.clone();
 
@@ -821,93 +451,19 @@ impl AppGui {
         // Notify background thread
         let _ = self.tx.send(AppMessage::UpdateConfig(self.config.clone()));
 
-        #[cfg(target_os = "linux")]
-        {
-            let _ = self.tray_channel.send(self.config.clone());
-        }
-
-        #[cfg(not(target_os = "linux"))]
-        {
-            // Sync tray menu states
-            self.sync_menu_states();
-
-            // Update icon if enabled state toggled
-            if old_enabled != self.config.enabled {
-                if let Some(tray) = &mut self.tray_icon {
-                    let icon = generate_tray_icon(self.config.enabled);
-                    let _ = tray.set_icon(Some(icon));
-                }
-            }
-        }
+        let _ = self.tray_channel.send(self.config.clone());
 
         ctx.request_repaint();
     }
 
     fn apply_daemon_config(&mut self, new_config: EngineConfig, ctx: &egui::Context) {
-        #[cfg(not(target_os = "linux"))]
-        let enabled_changed = self.config.enabled != new_config.enabled;
-
         self.config = new_config;
         *self.shared_config.lock().unwrap() = self.config.clone();
-
-        #[cfg(target_os = "linux")]
-        {
-            let _ = self.tray_channel.send(self.config.clone());
-        }
-
-        #[cfg(not(target_os = "linux"))]
-        {
-            self.sync_menu_states();
-            if enabled_changed {
-                if let Some(tray) = &mut self.tray_icon {
-                    let icon = generate_tray_icon(self.config.enabled);
-                    let _ = tray.set_icon(Some(icon));
-                }
-            }
-        }
-
+        let _ = self.tray_channel.send(self.config.clone());
         ctx.request_repaint();
     }
-
-    #[cfg(not(target_os = "linux"))]
-    fn sync_menu_states(&self) {
-        self.menu_enabled.set_text(if self.config.enabled {
-            "✓ Bật tiếng Việt"
-        } else {
-            "  Bật tiếng Việt"
-        });
-        self.menu_telex
-            .set_text(if self.config.input_method == InputMethod::Telex {
-                "✓ Telex"
-            } else {
-                "  Telex"
-            });
-        self.menu_vni
-            .set_text(if self.config.input_method == InputMethod::Vni {
-                "✓ VNI"
-            } else {
-                "  VNI"
-            });
-        self.menu_unicode
-            .set_text(if self.config.charset == Charset::Unicode {
-                "✓ Unicode"
-            } else {
-                "  Unicode"
-            });
-        self.menu_tcvn3
-            .set_text(if self.config.charset == Charset::Tcvn3 {
-                "✓ TCVN3 (ABC)"
-            } else {
-                "  TCVN3 (ABC)"
-            });
-        self.menu_vni_charset
-            .set_text(if self.config.charset == Charset::Vni {
-                "✓ VNI Windows"
-            } else {
-                "  VNI Windows"
-            });
-    }
 }
+
 
 impl eframe::App for AppGui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -915,8 +471,7 @@ impl eframe::App for AppGui {
         let current_shared = self.shared_config.lock().unwrap().clone();
         if current_shared != self.config {
             self.config = current_shared;
-            #[cfg(not(target_os = "linux"))]
-            self.sync_menu_states();
+
         }
 
         // 2. Poll for updates from the background keyboard thread
@@ -988,16 +543,7 @@ impl eframe::App for AppGui {
                         .italics()
                         .color(egui::Color32::from_rgb(100, 110, 125)),
                 );
-                #[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
-                {
-                    ui.add_space(4.0);
-                    ui.label(
-                        egui::RichText::new("⚠️ Chế độ giả lập (macOS)")
-                            .size(10.0)
-                            .strong()
-                            .color(egui::Color32::from_rgb(220, 53, 69)),
-                    );
-                }
+
             });
 
             ui.add_space(8.0);
@@ -1244,44 +790,30 @@ impl Drop for AppGui {
     }
 }
 
-#[cfg(target_os = "windows")]
+
+/// Set or remove the XDG autostart entry for VKey on Linux.
 fn set_startup(enabled: bool) {
-    if let Ok(exe_path) = std::env::current_exe() {
-        let exe_str = exe_path.to_string_lossy().into_owned();
-        std::thread::spawn(move || {
-            if enabled {
-                let _ = std::process::Command::new("reg")
-                    .args([
-                        "add",
-                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-                        "/v",
-                        "VKey",
-                        "/t",
-                        "REG_SZ",
-                        "/d",
-                        &format!("\"{}\"", exe_str),
-                        "/f",
-                    ])
-                    .output();
-            } else {
-                let _ = std::process::Command::new("reg")
-                    .args([
-                        "delete",
-                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-                        "/v",
-                        "VKey",
-                        "/f",
-                    ])
-                    .output();
-            }
-        });
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
+    let autostart_dir = std::path::Path::new(&home).join(".config/autostart");
+    let desktop_path = autostart_dir.join("vkey.desktop");
+    if enabled {
+        let Ok(exe_path) = std::env::current_exe() else {
+            return;
+        };
+        let desktop_content = format!(
+            "[Desktop Entry]\nType=Application\nName=VKey\nExec={}\nX-GNOME-Autostart-enabled=true\n",
+            exe_path.display()
+        );
+        let _ = std::fs::create_dir_all(&autostart_dir);
+        let _ = std::fs::write(&desktop_path, desktop_content);
+    } else {
+        let _ = std::fs::remove_file(&desktop_path);
     }
 }
 
-#[cfg(not(target_os = "windows"))]
-fn set_startup(_enabled: bool) {}
 
-// Generate the tray icon dynamically by drawing into an RGBA buffer
 fn generate_tray_pixels(is_vietnamese: bool) -> (Vec<u8>, usize, usize) {
     let width = 32;
     let height = 32;
@@ -1373,11 +905,6 @@ fn generate_tray_pixels(is_vietnamese: bool) -> (Vec<u8>, usize, usize) {
     (pixels, width, height)
 }
 
-#[cfg(not(target_os = "linux"))]
-fn generate_tray_icon(is_vietnamese: bool) -> tray_icon::Icon {
-    let (pixels, width, height) = generate_tray_pixels(is_vietnamese);
-    tray_icon::Icon::from_rgba(pixels, width as u32, height as u32).unwrap()
-}
 
 #[cfg(target_os = "linux")]
 fn generate_tray_pixbuf(is_vietnamese: bool) -> gtk::gdk_pixbuf::Pixbuf {
@@ -1399,24 +926,14 @@ pub fn setup_custom_fonts(ctx: &egui::Context) {
     #[allow(unused_assignments)]
     let mut font_data = None;
 
-    #[cfg(target_os = "windows")]
-    {
-        font_data = std::fs::read("C:\\Windows\\Fonts\\segoeui.ttf")
-            .or_else(|_| std::fs::read("C:\\Windows\\Fonts\\arial.ttf"))
-            .ok();
-    }
+
     #[cfg(target_os = "linux")]
     {
         font_data = std::fs::read("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
             .or_else(|_| std::fs::read("/usr/share/fonts/TTF/DejaVuSans.ttf"))
             .ok();
     }
-    #[cfg(target_os = "macos")]
-    {
-        font_data = std::fs::read("/System/Library/Fonts/Helvetica.ttc")
-            .or_else(|_| std::fs::read("/Library/Fonts/Arial.ttf"))
-            .ok();
-    }
+
 
     if let Some(data) = font_data {
         fonts.font_data.insert(

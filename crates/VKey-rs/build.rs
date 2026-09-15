@@ -1,7 +1,7 @@
 use std::{
     env,
     ffi::OsStr,
-    fs::{self, File},
+    fs,
     path::{Path, PathBuf},
 };
 
@@ -24,14 +24,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "cargo:rustc-env=VKEY_APP_ICON_PNG_PATH={}",
         icon_png.display()
     );
-
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        let icon_ico = out_dir.join("vkey-app-icon.ico");
-        write_windows_icon(&icon_source, &icon_ico)?;
-        winresource::WindowsResource::new()
-            .set_icon(icon_ico.to_string_lossy().as_ref())
-            .compile()?;
-    }
 
     Ok(())
 }
@@ -59,26 +51,4 @@ fn matches_icon_name(path: &Path, prefix: &str) -> bool {
     };
 
     name.starts_with(prefix) && name.ends_with(".png")
-}
-
-fn write_windows_icon(
-    source_png: &Path,
-    target_ico: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let source = image::ImageReader::open(source_png)?
-        .with_guessed_format()?
-        .decode()?
-        .into_rgba8();
-    let mut icon_dir = ico::IconDir::new(ico::ResourceType::Icon);
-
-    for size in [16, 24, 32, 40, 48, 64, 128, 256] {
-        let resized =
-            image::imageops::resize(&source, size, size, image::imageops::FilterType::Lanczos3);
-        let icon_image = ico::IconImage::from_rgba_data(size, size, resized.into_raw());
-        icon_dir.add_entry(ico::IconDirEntry::encode(&icon_image)?);
-    }
-
-    let mut file = File::create(target_ico)?;
-    icon_dir.write(&mut file)?;
-    Ok(())
 }

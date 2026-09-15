@@ -1,5 +1,3 @@
-#![windows_subsystem = "windows"]
-
 mod config_store;
 mod gui;
 
@@ -33,46 +31,8 @@ struct Options {
     headless: bool,
 }
 
-#[cfg(target_os = "windows")]
-fn show_existing_window() {
-    unsafe {
-        let title: Vec<u16> = "VKey Settings\0".encode_utf16().collect();
-        let hwnd = windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW(
-            std::ptr::null(),
-            title.as_ptr(),
-        );
-        if hwnd != 0 {
-            windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
-                hwnd,
-                windows_sys::Win32::UI::WindowsAndMessaging::SW_RESTORE,
-            );
-            windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
-                hwnd,
-                windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOW,
-            );
-            windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
-        }
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
 fn show_existing_window() {}
 
-#[cfg(target_os = "windows")]
-fn load_window_icon() -> Option<egui::IconData> {
-    let bytes = include_bytes!(env!("VKEY_APP_ICON_PNG_PATH"));
-    let image = image::load_from_memory(bytes).ok()?;
-    let rgba = image.into_rgba8();
-    let (width, height) = rgba.dimensions();
-
-    Some(egui::IconData {
-        rgba: rgba.into_raw(),
-        width,
-        height,
-    })
-}
-
-#[cfg(not(target_os = "windows"))]
 fn load_window_icon() -> Option<egui::IconData> {
     None
 }
@@ -202,12 +162,6 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-#[cfg(target_os = "linux")]
-fn init_platform_gui() -> Result<(), Box<dyn std::error::Error>> {
-    Ok(())
-}
-
-#[cfg(not(target_os = "linux"))]
 fn init_platform_gui() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
@@ -274,13 +228,9 @@ fn run_daemon(
         let decision = decision_for(&action);
 
         if decision == KeyboardDecision::Consume {
-            // A Windows low-level hook must receive the consume decision before
-            // SendInput runs. On Linux/X11, injecting text while the device is
-            // still frozen ensures rapid subsequent physical keys cannot race ahead
-            // of the replacement (e.g. preventing "bạn" from becoming "bnạ").
-            #[cfg(target_os = "windows")]
-            backend.decide(decision)?;
-
+            // On Linux/X11, injecting text while the device is still frozen ensures
+            // rapid subsequent physical keys cannot race ahead of the replacement
+            // (e.g. preventing "bạn" from becoming "bnạ").
             let result = {
                 let mut injector = backend.text_injector();
                 execute_engine_action(&mut injector, &action)
@@ -290,7 +240,6 @@ fn run_daemon(
                 error!(error = %injection_error, "Text injection failed; composition reset");
             }
 
-            #[cfg(not(target_os = "windows"))]
             backend.decide(decision)?;
         } else {
             backend.decide(decision)?;

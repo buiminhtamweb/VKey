@@ -4,17 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Vietnamese input method with GUI and tray icon for Windows and Linux X11."
+description = "Vietnamese input method with GUI and tray icon for Linux X11."
 homepage = "https://github.com/buiminhtamweb/VKey"
 repository = "https://github.com/buiminhtamweb/VKey"
 readme = "../../README.md"
 default-run = "VKey-rs"
-
-[package.metadata.wix]
-upgrade-guid = "197D1A8D-D04E-42CC-9986-8AF8032504A3"
-path-guid = "66CCD63B-2609-4A1F-9D0F-8E72AFC665CE"
-license = false
-eula = false
 
 [dependencies]
 keyboard-linux = { path = "../keyboard-linux" }
@@ -29,13 +23,7 @@ serde = { workspace = true, features = ["derive"] }
 unicode-segmentation = "1.13.3"
 
 [build-dependencies]
-ico = "0.4"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
-winresource = "0.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
-
-[target.'cfg(target_os = "windows")'.dependencies]
-image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
-windows-sys = { version = "0.52.0", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }

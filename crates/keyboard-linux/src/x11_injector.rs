@@ -34,7 +34,6 @@ impl TextInjector for X11TextInjector<'_> {
         self.backend.delete_graphemes(count)
     }
 
-    #[cfg(target_os = "linux")]
     fn replace_text(&mut self, delete_graphemes: usize, text: &str) -> Result<()> {
         self.backend.replace_text(delete_graphemes, text)
     }
