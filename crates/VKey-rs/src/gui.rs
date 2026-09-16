@@ -14,8 +14,6 @@ use vietnamese_core::{Charset, EngineConfig, InputMethod};
 
 use crate::{AppMessage, GuiMessage};
 
-
-
 pub struct AppGui {
     config: EngineConfig,
     tx: Sender<AppMessage>,
@@ -427,7 +425,6 @@ impl AppGui {
         }
     }
 
-
     fn request_exit(&mut self, ctx: &egui::Context) {
         if self.exit_requested {
             return;
@@ -439,7 +436,6 @@ impl AppGui {
     }
 
     fn update_config(&mut self, new_config: EngineConfig, ctx: &egui::Context) {
-
         self.config = new_config.clone();
 
         // Update shared lock
@@ -464,14 +460,12 @@ impl AppGui {
     }
 }
 
-
 impl eframe::App for AppGui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // 1. Sync config if background thread changed it
         let current_shared = self.shared_config.lock().unwrap().clone();
         if current_shared != self.config {
             self.config = current_shared;
-
         }
 
         // 2. Poll for updates from the background keyboard thread
@@ -790,7 +784,6 @@ impl Drop for AppGui {
     }
 }
 
-
 /// Set or remove the XDG autostart entry for VKey on Linux.
 fn set_startup(enabled: bool) {
     let Some(home) = std::env::var_os("HOME") else {
@@ -812,7 +805,6 @@ fn set_startup(enabled: bool) {
         let _ = std::fs::remove_file(&desktop_path);
     }
 }
-
 
 fn generate_tray_pixels(is_vietnamese: bool) -> (Vec<u8>, usize, usize) {
     let width = 32;
@@ -905,7 +897,6 @@ fn generate_tray_pixels(is_vietnamese: bool) -> (Vec<u8>, usize, usize) {
     (pixels, width, height)
 }
 
-
 #[cfg(target_os = "linux")]
 fn generate_tray_pixbuf(is_vietnamese: bool) -> gtk::gdk_pixbuf::Pixbuf {
     let (pixels, width, height) = generate_tray_pixels(is_vietnamese);
@@ -926,14 +917,12 @@ pub fn setup_custom_fonts(ctx: &egui::Context) {
     #[allow(unused_assignments)]
     let mut font_data = None;
 
-
     #[cfg(target_os = "linux")]
     {
         font_data = std::fs::read("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
             .or_else(|_| std::fs::read("/usr/share/fonts/TTF/DejaVuSans.ttf"))
             .ok();
     }
-
 
     if let Some(data) = font_data {
         fonts.font_data.insert(

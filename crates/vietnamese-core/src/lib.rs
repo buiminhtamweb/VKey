@@ -3,6 +3,7 @@ pub mod composition;
 pub mod config;
 pub mod engine;
 pub mod key;
+pub mod spelling;
 pub mod telex;
 pub mod tone;
 pub mod unicode;

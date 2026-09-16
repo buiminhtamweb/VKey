@@ -126,6 +126,40 @@ mod platform {
         }
     }
 
+    pub const VIETNAMESE_UNICODE_CHARS: &[char] = &[
+        // 67 lowercase characters first (most frequently used in Vietnamese typing)
+        'à', 'á', 'ả', 'ã', 'ạ', 'ă', 'ằ', 'ắ', 'ẳ', 'ẵ', 'ặ', 'â', 'ầ', 'ấ', 'ẩ', 'ẫ', 'ậ', 'è',
+        'é', 'ẻ', 'ẽ', 'ẹ', 'ê', 'ề', 'ế', 'ể', 'ễ', 'ệ', 'ì', 'í', 'ỉ', 'ĩ', 'ị', 'ò', 'ó', 'ỏ',
+        'õ', 'ọ', 'ô', 'ồ', 'ố', 'ổ', 'ỗ', 'ộ', 'ơ', 'ờ', 'ớ', 'ở', 'ỡ', 'ợ', 'ù', 'ú', 'ủ', 'ũ',
+        'ụ', 'ư', 'ừ', 'ứ', 'ử', 'ữ', 'ự', 'ỳ', 'ý', 'ỷ', 'ỹ', 'ỵ', 'đ',
+        // 67 uppercase characters
+        'À', 'Á', 'Ả', 'Ã', 'Ạ', 'Ă', 'Ằ', 'Ắ', 'Ẳ', 'Ẵ', 'Ặ', 'Â', 'Ầ', 'Ấ', 'Ẩ', 'Ẫ', 'Ậ', 'È',
+        'É', 'Ẻ', 'Ẽ', 'Ẹ', 'Ê', 'Ề', 'Ế', 'Ể', 'Ễ', 'Ệ', 'Ì', 'Í', 'Ỉ', 'Ĩ', 'Ị', 'Ò', 'Ó', 'Ỏ',
+        'Õ', 'Ọ', 'Ô', 'Ồ', 'Ố', 'Ổ', 'Ỗ', 'Ộ', 'Ơ', 'Ờ', 'Ớ', 'Ở', 'Ỡ', 'Ợ', 'Ù', 'Ú', 'Ủ', 'Ũ',
+        'Ụ', 'Ư', 'Ừ', 'Ứ', 'Ử', 'Ữ', 'Ự', 'Ỳ', 'Ý', 'Ỷ', 'Ỹ', 'Ỵ', 'Đ',
+    ];
+
+    #[derive(Debug)]
+    pub struct PremappedChunk {
+        pub first_keycode: u8,
+        pub count: u8,
+        pub keysyms_per_keycode: u8,
+        pub original_mapping: Vec<u32>,
+    }
+
+    #[derive(Debug)]
+    pub struct VietnamesePremappedTable {
+        pub chunks: Vec<PremappedChunk>,
+        pub char_to_keycode: std::collections::HashMap<char, u8>,
+        pub is_premapped: [bool; 256],
+    }
+
+    impl VietnamesePremappedTable {
+        pub fn is_premapped_keycode(&self, keycode: u8) -> bool {
+            self.is_premapped[usize::from(keycode)]
+        }
+    }
+
     pub struct X11KeyboardBackend {
         connection: XCBConnection,
         root: u32,
@@ -135,6 +169,7 @@ mod platform {
         intercepted_keycodes: Vec<u8>,
         grab_device_ids: Vec<u16>,
         grab_modifiers: Vec<u32>,
+        premapped_table: Option<VietnamesePremappedTable>,
         injection_keycode: u8,
         injection_keysyms_per_keycode: u8,
         original_injection_mapping: Vec<u32>,
@@ -259,7 +294,16 @@ mod platform {
 
             let (injection_keycode, injection_keysyms_per_keycode, original_mapping) =
                 find_spare_keycode(&connection)?;
-            let intercepted_keycodes = interceptable_keycodes(&keymap, injection_keycode);
+            let premapped_table = setup_premapped_table(&connection, injection_keycode)?;
+            let mut excluded_keycodes = vec![injection_keycode];
+            if let Some(ref table) = premapped_table {
+                for (kc, &is_mapped) in table.is_premapped.iter().enumerate() {
+                    if is_mapped {
+                        excluded_keycodes.push(kc as u8);
+                    }
+                }
+            }
+            let intercepted_keycodes = interceptable_keycodes(&keymap, &excluded_keycodes);
             let grab_modifiers = safe_grab_modifiers(&keymap);
 
             info!(
@@ -270,6 +314,7 @@ mod platform {
                 xkb_major,
                 xkb_minor,
                 injection_keycode,
+                has_premapped = premapped_table.is_some(),
                 "X11 input controller connected"
             );
             let mut xtest_device_ids = Vec::new();
@@ -301,6 +346,7 @@ mod platform {
                 intercepted_keycodes,
                 grab_device_ids,
                 grab_modifiers,
+                premapped_table,
                 injection_keycode,
                 injection_keysyms_per_keycode,
                 original_injection_mapping: original_mapping,
@@ -865,7 +911,12 @@ mod platform {
             }
 
             let _target = self.require_focused_window()?;
-            let keys = planned_replacement_keys(&self.keymap, delete_graphemes, text);
+            let keys = planned_replacement_keys(
+                &self.keymap,
+                self.premapped_table.as_ref(),
+                delete_graphemes,
+                text,
+            );
 
             for key in keys {
                 self.queue_synthetic_key(key)?;
@@ -890,6 +941,7 @@ mod platform {
         fn queue_synthetic_key(&mut self, key: SyntheticKey) -> Result<()> {
             let (keycode, is_mapped) = match key {
                 SyntheticKey::Direct(keycode) => (keycode, false),
+                SyntheticKey::Premapped(keycode) => (keycode, false),
                 SyntheticKey::Mapped(keysym) => {
                     self.set_injection_keysym(keysym)?;
                     (self.injection_keycode, true)
@@ -958,6 +1010,27 @@ mod platform {
             Ok(())
         }
 
+        fn restore_premapped_table(&mut self) -> Result<()> {
+            if let Some(table) = self.premapped_table.take() {
+                for chunk in table.chunks {
+                    let _cookie = self
+                        .connection
+                        .change_keyboard_mapping(
+                            chunk.count,
+                            chunk.first_keycode,
+                            chunk.keysyms_per_keycode,
+                            &chunk.original_mapping,
+                        )
+                        .map_err(|error| KeyboardError::X11Protocol(error.to_string()))?;
+                }
+                self.connection
+                    .flush()
+                    .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))?;
+                info!("Restored original X11 keycode mappings for pre-mapped chunks");
+            }
+            Ok(())
+        }
+
         fn restore_injection_mapping(&mut self) -> Result<()> {
             if self.current_injection_keysym.is_none() {
                 return Ok(());
@@ -990,6 +1063,7 @@ mod platform {
         fn is_synthetic_event(&self, device_id: u16, source_id: u16, detail: u32) -> bool {
             synthetic_event_is_identified(
                 &self.xtest_device_ids,
+                self.premapped_table.as_ref(),
                 device_id,
                 source_id,
                 detail,
@@ -1116,7 +1190,10 @@ mod platform {
             self.connection
                 .flush()
                 .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))?;
-            self.restore_injection_mapping()?;
+            let r1 = self.restore_injection_mapping();
+            let r2 = self.restore_premapped_table();
+            r1?;
+            r2?;
             self.raw_modifiers.clear();
             self.pressed_shift_keys.clear();
             self.last_base_shift = None;
@@ -1267,10 +1344,197 @@ mod platform {
         fn drop(&mut self) {
             if self.running {
                 let _ = self.stop();
-            } else if let Err(error) = self.restore_injection_mapping() {
-                warn!(%error, "failed to restore temporary X11 keyboard mapping");
+            } else {
+                if let Err(error) = self.restore_injection_mapping() {
+                    warn!(%error, "failed to restore temporary X11 keyboard mapping");
+                }
+                if let Err(error) = self.restore_premapped_table() {
+                    warn!(%error, "failed to restore pre-mapped X11 keyboard mapping");
+                }
             }
         }
+    }
+
+    fn setup_premapped_table(
+        connection: &XCBConnection,
+        reserved_injection_keycode: u8,
+    ) -> Result<Option<VietnamesePremappedTable>> {
+        let setup = connection.setup();
+        let min = setup.min_keycode;
+        let max = setup.max_keycode;
+        let char_count = VIETNAMESE_UNICODE_CHARS.len();
+
+        let count = max
+            .checked_sub(min)
+            .and_then(|value| value.checked_add(1))
+            .ok_or_else(|| KeyboardError::X11Protocol("invalid X11 keycode range".to_owned()))?;
+        let reply = connection
+            .get_keyboard_mapping(min, count)
+            .map_err(|error| KeyboardError::X11Protocol(error.to_string()))?
+            .reply()
+            .map_err(|error| KeyboardError::X11Protocol(error.to_string()))?;
+
+        let width = reply.keysyms_per_keycode;
+        if width == 0 {
+            warn!("X11 returned zero keysyms per keycode");
+            return Ok(None);
+        }
+
+        let is_empty_kc = |kc: u8| -> bool {
+            let offset = (kc - min) as usize;
+            let start = offset * (width as usize);
+            let end = start + (width as usize);
+            if end <= reply.keysyms.len() {
+                reply.keysyms[start..end].iter().all(|&sym| sym == 0)
+            } else {
+                false
+            }
+        };
+
+        let is_excluded = |kc: u8| -> bool {
+            kc == reserved_injection_keycode
+                || kc == 121 // AudioMute
+                || (133..=135).contains(&kc) // Super_L, Super_R, Menu
+                || (203..=207).contains(&kc) // Mode_switch, Alt_L, Meta_L, Super_L, Hyper_L
+        };
+
+        let mut candidate_keycodes: Vec<u8> = Vec::with_capacity(char_count);
+
+        // 1. Completely empty keycodes anywhere (excluding reserved)
+        for kc in min..=max {
+            if !is_excluded(kc) && is_empty_kc(kc) && !candidate_keycodes.contains(&kc) {
+                candidate_keycodes.push(kc);
+                if candidate_keycodes.len() == char_count {
+                    break;
+                }
+            }
+        }
+
+        // 2. High keycodes in 136..=max (avoiding excluded)
+        if candidate_keycodes.len() < char_count {
+            for kc in 136..=max {
+                if !is_excluded(kc) && !candidate_keycodes.contains(&kc) {
+                    candidate_keycodes.push(kc);
+                    if candidate_keycodes.len() == char_count {
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 3. High keycodes in 122..=132 (avoiding excluded)
+        if candidate_keycodes.len() < char_count {
+            for kc in 122..=132 {
+                if !is_excluded(kc) && !candidate_keycodes.contains(&kc) {
+                    candidate_keycodes.push(kc);
+                    if candidate_keycodes.len() == char_count {
+                        break;
+                    }
+                }
+            }
+        }
+
+        if candidate_keycodes.is_empty() {
+            warn!("X11 has no spare keycodes available for pre-mapped Vietnamese keymap");
+            return Ok(None);
+        }
+
+        let map_count = candidate_keycodes.len().min(char_count);
+        candidate_keycodes.truncate(map_count);
+        candidate_keycodes.sort_unstable();
+
+        // Group candidate keycodes into contiguous chunks for change_keyboard_mapping
+        let mut chunk_ranges: Vec<(u8, u8)> = Vec::new();
+        for &kc in &candidate_keycodes {
+            if let Some(last) = chunk_ranges.last_mut() {
+                if last.0 + last.1 == kc {
+                    last.1 += 1;
+                    continue;
+                }
+            }
+            chunk_ranges.push((kc, 1));
+        }
+
+        let mut chunks = Vec::with_capacity(chunk_ranges.len());
+        let mut char_to_keycode = std::collections::HashMap::with_capacity(map_count);
+        let mut is_premapped = [false; 256];
+        let mut char_idx = 0;
+
+        for (first_kc, cnt) in chunk_ranges {
+            let chunk_reply = match connection.get_keyboard_mapping(first_kc, cnt) {
+                Ok(cookie) => match cookie.reply() {
+                    Ok(reply) => reply,
+                    Err(error) => {
+                        rollback_chunks(connection, &chunks);
+                        return Err(KeyboardError::X11Protocol(error.to_string()));
+                    }
+                },
+                Err(error) => {
+                    rollback_chunks(connection, &chunks);
+                    return Err(KeyboardError::X11Protocol(error.to_string()));
+                }
+            };
+            let orig_mapping = chunk_reply.keysyms;
+
+            let mut new_mapping = Vec::with_capacity((cnt as usize) * (width as usize));
+            for offset in 0..cnt {
+                let kc = first_kc + offset;
+                let character = VIETNAMESE_UNICODE_CHARS[char_idx];
+                char_idx += 1;
+
+                let keysym = Keysym::from_char(character).raw();
+                for _ in 0..width {
+                    new_mapping.push(keysym);
+                }
+                char_to_keycode.insert(character, kc);
+                is_premapped[usize::from(kc)] = true;
+            }
+
+            match connection.change_keyboard_mapping(cnt, first_kc, width, &new_mapping) {
+                Ok(cookie) => {
+                    if let Err(error) = cookie.check() {
+                        rollback_chunks(connection, &chunks);
+                        return Err(KeyboardError::X11Protocol(error.to_string()));
+                    }
+                }
+                Err(error) => {
+                    rollback_chunks(connection, &chunks);
+                    return Err(KeyboardError::X11Protocol(error.to_string()));
+                }
+            }
+
+            chunks.push(PremappedChunk {
+                first_keycode: first_kc,
+                count: cnt,
+                keysyms_per_keycode: width,
+                original_mapping: orig_mapping,
+            });
+        }
+
+        info!(
+            chunk_count = chunks.len(),
+            mapped_count = map_count,
+            char_count,
+            "Pre-mapped Vietnamese Unicode characters to safe X11 keycodes"
+        );
+
+        Ok(Some(VietnamesePremappedTable {
+            chunks,
+            char_to_keycode,
+            is_premapped,
+        }))
+    }
+
+    fn rollback_chunks(connection: &XCBConnection, chunks: &[PremappedChunk]) {
+        for chunk in chunks {
+            let _ = connection.change_keyboard_mapping(
+                chunk.count,
+                chunk.first_keycode,
+                chunk.keysyms_per_keycode,
+                &chunk.original_mapping,
+            );
+        }
+        let _ = connection.flush();
     }
 
     fn find_spare_keycode(connection: &XCBConnection) -> Result<(u8, u8, Vec<u32>)> {
@@ -1292,6 +1556,8 @@ mod platform {
                 "X11 returned a zero-width keyboard mapping".to_owned(),
             ));
         }
+
+        // First preference: an unused keycode where all keysyms are zero
         for (offset, mapping) in reply.keysyms.chunks_exact(width).enumerate().rev() {
             if mapping.iter().all(|keysym| *keysym == 0) {
                 let offset = u8::try_from(offset).map_err(|_| {
@@ -1303,15 +1569,30 @@ mod platform {
                 return Ok((keycode, reply.keysyms_per_keycode, mapping.to_vec()));
             }
         }
+
+        // Fallback: if no completely empty keycode exists, borrow a safe high keycode (e.g. max keycode)
+        let fallback_keycode = max;
+        let offset = usize::from(fallback_keycode.saturating_sub(min));
+        let start = offset * width;
+        let end = start + width;
+        if end <= reply.keysyms.len() {
+            let orig = reply.keysyms[start..end].to_vec();
+            warn!(
+                fallback_keycode,
+                "no empty keycode found; using fallback high keycode for Unicode injection"
+            );
+            return Ok((fallback_keycode, reply.keysyms_per_keycode, orig));
+        }
+
         Err(KeyboardError::NoSpareKeycode)
     }
 
-    fn interceptable_keycodes(keymap: &xkb::Keymap, excluded: u8) -> Vec<u8> {
+    fn interceptable_keycodes(keymap: &xkb::Keymap, excluded: &[u8]) -> Vec<u8> {
         let min = keymap.min_keycode().raw();
         let max = keymap.max_keycode().raw();
         (min..=max)
             .filter_map(|raw| u8::try_from(raw).ok())
-            .filter(|keycode| *keycode != excluded)
+            .filter(|keycode| !excluded.contains(keycode))
             .filter(|keycode| keycode_is_interceptable(keymap, *keycode))
             .collect()
     }
@@ -1474,11 +1755,13 @@ mod platform {
     #[derive(Clone, Copy)]
     enum SyntheticKey {
         Direct(u8),
+        Premapped(u8),
         Mapped(u32),
     }
 
     fn planned_replacement_keys(
         keymap: &xkb::Keymap,
+        premapped: Option<&VietnamesePremappedTable>,
         delete_graphemes: usize,
         text: &str,
     ) -> Vec<SyntheticKey> {
@@ -1487,6 +1770,11 @@ mod platform {
             .map_or(SyntheticKey::Mapped(key::BackSpace), SyntheticKey::Direct);
         keys.extend(std::iter::repeat_n(backspace, delete_graphemes));
         keys.extend(text.chars().map(|character| {
+            if let Some(table) = premapped {
+                if let Some(&keycode) = table.char_to_keycode.get(&character) {
+                    return SyntheticKey::Premapped(keycode);
+                }
+            }
             let keysym = Keysym::from_char(character).raw();
             find_direct_keycode_in(keymap, keysym)
                 .map_or(SyntheticKey::Mapped(keysym), SyntheticKey::Direct)
@@ -1520,6 +1808,7 @@ mod platform {
 
     fn synthetic_event_is_identified(
         xtest_device_ids: &[u16],
+        premapped: Option<&VietnamesePremappedTable>,
         device_id: u16,
         source_id: u16,
         detail: u32,
@@ -1528,6 +1817,9 @@ mod platform {
         xtest_device_ids.contains(&device_id)
             || xtest_device_ids.contains(&source_id)
             || detail == u32::from(injection_keycode)
+            || premapped.is_some_and(|table| {
+                u8::try_from(detail).is_ok_and(|kc| table.is_premapped_keycode(kc))
+            })
     }
 
     fn device_name_is_xtest(name: &[u8]) -> bool {
@@ -1636,6 +1928,7 @@ mod platform {
 
             assert!(!synthetic_event_is_identified(
                 &xtest_devices,
+                None,
                 physical_device,
                 physical_source,
                 letter_a_keycode,
@@ -1643,6 +1936,7 @@ mod platform {
             ));
             assert!(synthetic_event_is_identified(
                 &xtest_devices,
+                None,
                 physical_device,
                 5,
                 letter_a_keycode,
@@ -1650,6 +1944,7 @@ mod platform {
             ));
             assert!(synthetic_event_is_identified(
                 &xtest_devices,
+                None,
                 physical_device,
                 physical_source,
                 248,

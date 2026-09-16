@@ -114,9 +114,22 @@ fn try_circumflex(output: &mut [char], character: char) -> bool {
     }
 }
 
-fn try_w_shape(output: &mut [char], character: char) -> bool {
+fn try_w_shape(output: &mut Vec<char>, character: char) -> bool {
     if !character.eq_ignore_ascii_case(&'w') {
         return false;
+    }
+
+    // 0. If output is empty, standalone 'w' becomes 'ư' (or 'W' -> 'Ư')
+    if output.is_empty() {
+        output.push(if character.is_uppercase() { 'Ư' } else { 'ư' });
+        return true;
+    }
+
+    // If standalone 'ư' or 'Ư' is followed by another 'w', restore to 'ww' / 'WW'
+    if output.len() == 1 && (output[0] == 'ư' || output[0] == 'Ư') {
+        output[0] = if output[0].is_uppercase() { 'W' } else { 'w' };
+        output.push(character);
+        return true;
     }
 
     // 1. Check for "uo", "ua", and "uu" sequences

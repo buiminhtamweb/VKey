@@ -369,3 +369,32 @@ fn test_charsets() {
     assert_eq!(type_text_with_config("dduongwf", config_tcvn3), "®õêng");
     assert_eq!(type_text_with_config("dduongwf", config_vni), "ñöôøng");
 }
+
+#[test]
+fn test_telex_w_standalone_and_prefix() {
+    assert_eq!(type_text("w"), "ư");
+    assert_eq!(type_text("W"), "Ư");
+    assert_eq!(type_text("ww"), "ww");
+    assert_eq!(type_text("www"), "www");
+    assert_eq!(type_text("wa"), "ưa");
+    assert_eq!(type_text("ws"), "ứ");
+    assert_eq!(type_text("wf"), "ừ");
+    assert_eq!(type_text("wr"), "ử");
+}
+
+#[test]
+fn test_capitalized_buif_is_bui_with_grave() {
+    assert_eq!(type_text("Buif"), "Bùi");
+    assert_eq!(type_text("BUIF"), "BÙI");
+}
+
+#[test]
+fn test_spelling_auto_restore_english_words() {
+    assert_eq!(type_text("test"), "test");
+    assert_eq!(type_text("post"), "post");
+    assert_eq!(type_text("cost"), "cost");
+    assert_eq!(type_text("filter"), "filter");
+    assert_eq!(type_text("format"), "format");
+    assert_eq!(type_text("clear"), "clear");
+    assert_eq!(type_text("smart"), "smart");
+}
