@@ -27,6 +27,12 @@ fn key_from_keysym(raw_keysym: u32) -> Key {
         key::Caps_Lock => Key::CapsLock,
         key::Num_Lock => Key::NumLock,
         key::F1..=key::F12 => Key::F((raw_keysym - key::F1 + 1) as u8),
+        key::dead_belowdot => Key::Character('.'),
+        key::dead_hook => Key::Character('?'),
+        key::dead_acute => Key::Character('\''),
+        key::dead_grave => Key::Character('`'),
+        key::dead_tilde => Key::Character('~'),
+        key::dead_circumflex => Key::Character('^'),
         _ => Keysym::new(raw_keysym)
             .key_char()
             .map_or(Key::Unknown, Key::Character),
@@ -127,12 +133,12 @@ mod platform {
     }
 
     pub const VIETNAMESE_UNICODE_CHARS: &[char] = &[
-        // 67 lowercase characters first (most frequently used in Vietnamese typing)
-        'à', 'á', 'ả', 'ã', 'ạ', 'ă', 'ằ', 'ắ', 'ẳ', 'ẵ', 'ặ', 'â', 'ầ', 'ấ', 'ẩ', 'ẫ', 'ậ', 'è',
-        'é', 'ẻ', 'ẽ', 'ẹ', 'ê', 'ề', 'ế', 'ể', 'ễ', 'ệ', 'ì', 'í', 'ỉ', 'ĩ', 'ị', 'ò', 'ó', 'ỏ',
-        'õ', 'ọ', 'ô', 'ồ', 'ố', 'ổ', 'ỗ', 'ộ', 'ơ', 'ờ', 'ớ', 'ở', 'ỡ', 'ợ', 'ù', 'ú', 'ủ', 'ũ',
-        'ụ', 'ư', 'ừ', 'ứ', 'ử', 'ữ', 'ự', 'ỳ', 'ý', 'ỷ', 'ỹ', 'ỵ', 'đ',
-        // 67 uppercase characters
+        // Top 18 most frequently used lowercase vowel+tone characters first (matched to empty keycodes)
+        'à', 'á', 'ả', 'ã', 'ạ', 'è', 'é', 'ẹ', 'ì', 'í', 'ò', 'ó', 'ọ', 'ù', 'ú', 'ụ', 'đ', 'ư',
+        // Remaining lowercase characters
+        'ă', 'ằ', 'ắ', 'ẳ', 'ẵ', 'ặ', 'â', 'ầ', 'ấ', 'ẩ', 'ẫ', 'ậ', 'ê', 'ề', 'ế', 'ể', 'ễ', 'ệ',
+        'ỉ', 'ĩ', 'ị', 'ỏ', 'õ', 'ô', 'ồ', 'ố', 'ổ', 'ỗ', 'ộ', 'ơ', 'ờ', 'ớ', 'ở', 'ỡ', 'ợ', 'ủ',
+        'ũ', 'ừ', 'ứ', 'ử', 'ữ', 'ự', 'ỳ', 'ý', 'ỷ', 'ỹ', 'ỵ', // 67 uppercase characters
         'À', 'Á', 'Ả', 'Ã', 'Ạ', 'Ă', 'Ằ', 'Ắ', 'Ẳ', 'Ẵ', 'Ặ', 'Â', 'Ầ', 'Ấ', 'Ẩ', 'Ẫ', 'Ậ', 'È',
         'É', 'Ẻ', 'Ẽ', 'Ẹ', 'Ê', 'Ề', 'Ế', 'Ể', 'Ễ', 'Ệ', 'Ì', 'Í', 'Ỉ', 'Ĩ', 'Ị', 'Ò', 'Ó', 'Ỏ',
         'Õ', 'Ọ', 'Ô', 'Ồ', 'Ố', 'Ổ', 'Ỗ', 'Ộ', 'Ơ', 'Ờ', 'Ớ', 'Ở', 'Ỡ', 'Ợ', 'Ù', 'Ú', 'Ủ', 'Ũ',
@@ -203,6 +209,7 @@ mod platform {
         pub fn new() -> Result<Self> {
             ensure_display_is_set()?;
             ensure_x11_session()?;
+            ensure_us_keyboard_layout();
             let (connection, screen_number) = XCBConnection::connect(None)
                 .map_err(|error| KeyboardError::X11Connection(error.to_string()))?;
             let root = connection
@@ -911,19 +918,37 @@ mod platform {
             }
 
             let _target = self.require_focused_window()?;
-            let keys = planned_replacement_keys(
-                &self.keymap,
-                self.premapped_table.as_ref(),
-                delete_graphemes,
-                text,
-            );
 
-            for key in keys {
+            // 1. If we have Backspaces, send them first and flush so the application deletes cleanly
+            if delete_graphemes > 0 {
+                let backspace = find_direct_keycode_in(&self.keymap, key::BackSpace)
+                    .map_or(SyntheticKey::Mapped(key::BackSpace), SyntheticKey::Direct);
+                for _ in 0..delete_graphemes {
+                    self.queue_synthetic_key(backspace)?;
+                }
+                self.connection
+                    .flush()
+                    .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))?;
+            }
+
+            // 2. Send replacement characters
+            for character in text.chars() {
+                let key = if let Some(ref table) = self.premapped_table {
+                    if let Some(&keycode) = table.char_to_keycode.get(&character) {
+                        SyntheticKey::Premapped(keycode)
+                    } else {
+                        let keysym = Keysym::from_char(character).raw();
+                        find_direct_keycode_in(&self.keymap, keysym)
+                            .map_or(SyntheticKey::Mapped(keysym), SyntheticKey::Direct)
+                    }
+                } else {
+                    let keysym = Keysym::from_char(character).raw();
+                    find_direct_keycode_in(&self.keymap, keysym)
+                        .map_or(SyntheticKey::Mapped(keysym), SyntheticKey::Direct)
+                };
                 self.queue_synthetic_key(key)?;
             }
-            // Wait until the X server has processed the full replacement.
-            // Without this round trip, a quickly typed physical key can be
-            // delivered between our Backspace and Unicode XTEST events.
+
             self.connection
                 .sync()
                 .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))
@@ -992,6 +1017,9 @@ mod platform {
                 .check()
                 .map_err(|error| KeyboardError::X11Protocol(error.to_string()))?;
             self.current_injection_keysym = Some(keysym);
+            self.connection
+                .sync()
+                .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))?;
             Ok(())
         }
 
@@ -1400,36 +1428,12 @@ mod platform {
 
         let mut candidate_keycodes: Vec<u8> = Vec::with_capacity(char_count);
 
-        // 1. Completely empty keycodes anywhere (excluding reserved)
+        // Completely empty keycodes only (excluding reserved injection keycode and min keycode 8)
         for kc in min..=max {
-            if !is_excluded(kc) && is_empty_kc(kc) && !candidate_keycodes.contains(&kc) {
+            if !is_excluded(kc) && kc != 8 && is_empty_kc(kc) && !candidate_keycodes.contains(&kc) {
                 candidate_keycodes.push(kc);
                 if candidate_keycodes.len() == char_count {
                     break;
-                }
-            }
-        }
-
-        // 2. High keycodes in 136..=max (avoiding excluded)
-        if candidate_keycodes.len() < char_count {
-            for kc in 136..=max {
-                if !is_excluded(kc) && !candidate_keycodes.contains(&kc) {
-                    candidate_keycodes.push(kc);
-                    if candidate_keycodes.len() == char_count {
-                        break;
-                    }
-                }
-            }
-        }
-
-        // 3. High keycodes in 122..=132 (avoiding excluded)
-        if candidate_keycodes.len() < char_count {
-            for kc in 122..=132 {
-                if !is_excluded(kc) && !candidate_keycodes.contains(&kc) {
-                    candidate_keycodes.push(kc);
-                    if candidate_keycodes.len() == char_count {
-                        break;
-                    }
                 }
             }
         }
@@ -1759,29 +1763,6 @@ mod platform {
         Mapped(u32),
     }
 
-    fn planned_replacement_keys(
-        keymap: &xkb::Keymap,
-        premapped: Option<&VietnamesePremappedTable>,
-        delete_graphemes: usize,
-        text: &str,
-    ) -> Vec<SyntheticKey> {
-        let mut keys = Vec::with_capacity(delete_graphemes.saturating_add(text.chars().count()));
-        let backspace = find_direct_keycode_in(keymap, key::BackSpace)
-            .map_or(SyntheticKey::Mapped(key::BackSpace), SyntheticKey::Direct);
-        keys.extend(std::iter::repeat_n(backspace, delete_graphemes));
-        keys.extend(text.chars().map(|character| {
-            if let Some(table) = premapped {
-                if let Some(&keycode) = table.char_to_keycode.get(&character) {
-                    return SyntheticKey::Premapped(keycode);
-                }
-            }
-            let keysym = Keysym::from_char(character).raw();
-            find_direct_keycode_in(keymap, keysym)
-                .map_or(SyntheticKey::Mapped(keysym), SyntheticKey::Direct)
-        }));
-        keys
-    }
-
     fn queue_fake_key_on(connection: &XCBConnection, keycode: u8) -> Result<()> {
         for event_type in [xproto::KEY_PRESS_EVENT, xproto::KEY_RELEASE_EVENT] {
             let _cookie = connection
@@ -1866,6 +1847,23 @@ mod platform {
             ));
         }
         Ok(())
+    }
+
+    fn ensure_us_keyboard_layout() {
+        if let Ok(output) = std::process::Command::new("setxkbmap")
+            .arg("-query")
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if stdout.contains("layout:     vn")
+                || (stdout.contains("vn") && stdout.contains("variant:    us"))
+            {
+                warn!(
+                    "Detected Vietnamese XKB layout (vn). Resetting to standard US layout to prevent dead key issues."
+                );
+                let _ = std::process::Command::new("setxkbmap").arg("us").output();
+            }
+        }
     }
 
     #[cfg(test)]
