@@ -54,3 +54,33 @@ fn test_tam_dot() {
     assert!(injector.current_target().expect("query focus").is_some());
     injector.insert_text("Tâm.").expect("insert Tâm.");
 }
+
+#[test]
+#[ignore = "requires an X11 session"]
+fn test_premapped_table_initialization_and_cleanup() {
+    let backend = X11KeyboardBackend::new().expect("connect to X11 and pre-map table");
+    drop(backend);
+}
+
+#[test]
+#[ignore = "requires an X11 session and a disposable focused text field"]
+fn test_replace_complex_words() {
+    assert_eq!(
+        std::env::var("VKey_X11_INJECTION_TEST").as_deref(),
+        Ok("1"),
+        "set VKey_X11_INJECTION_TEST=1 only after focusing a disposable text field"
+    );
+
+    let mut backend = X11KeyboardBackend::new().expect("connect to X11");
+    let mut injector = backend.text_injector();
+    assert!(injector.current_target().expect("query focus").is_some());
+
+    // Test "đồng" replacement: "d" -> "đ"
+    injector.insert_text("d").expect("insert d");
+    injector.replace_text(1, "đ").expect("replace d with đ");
+
+    // Test "Cánh đồng bất tận, rược đuổi"
+    injector
+        .insert_text(" — Cánh đồng bất tận, rược đuổi")
+        .expect("insert sentence");
+}

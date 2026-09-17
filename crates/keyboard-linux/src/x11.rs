@@ -132,17 +132,87 @@ mod platform {
         }
     }
 
-    pub const VIETNAMESE_UNICODE_CHARS: &[char] = &[
-        // Top 18 most frequently used lowercase vowel+tone characters first (matched to empty keycodes)
-        'à', 'á', 'ả', 'ã', 'ạ', 'è', 'é', 'ẹ', 'ì', 'í', 'ò', 'ó', 'ọ', 'ù', 'ú', 'ụ', 'đ', 'ư',
-        // Remaining lowercase characters
-        'ă', 'ằ', 'ắ', 'ẳ', 'ẵ', 'ặ', 'â', 'ầ', 'ấ', 'ẩ', 'ẫ', 'ậ', 'ê', 'ề', 'ế', 'ể', 'ễ', 'ệ',
-        'ỉ', 'ĩ', 'ị', 'ỏ', 'õ', 'ô', 'ồ', 'ố', 'ổ', 'ỗ', 'ộ', 'ơ', 'ờ', 'ớ', 'ở', 'ỡ', 'ợ', 'ủ',
-        'ũ', 'ừ', 'ứ', 'ử', 'ữ', 'ự', 'ỳ', 'ý', 'ỷ', 'ỹ', 'ỵ', // 67 uppercase characters
-        'À', 'Á', 'Ả', 'Ã', 'Ạ', 'Ă', 'Ằ', 'Ắ', 'Ẳ', 'Ẵ', 'Ặ', 'Â', 'Ầ', 'Ấ', 'Ẩ', 'Ẫ', 'Ậ', 'È',
-        'É', 'Ẻ', 'Ẽ', 'Ẹ', 'Ê', 'Ề', 'Ế', 'Ể', 'Ễ', 'Ệ', 'Ì', 'Í', 'Ỉ', 'Ĩ', 'Ị', 'Ò', 'Ó', 'Ỏ',
-        'Õ', 'Ọ', 'Ô', 'Ồ', 'Ố', 'Ổ', 'Ỗ', 'Ộ', 'Ơ', 'Ờ', 'Ớ', 'Ở', 'Ỡ', 'Ợ', 'Ù', 'Ú', 'Ủ', 'Ũ',
-        'Ụ', 'Ư', 'Ừ', 'Ứ', 'Ử', 'Ữ', 'Ự', 'Ỳ', 'Ý', 'Ỷ', 'Ỹ', 'Ỵ', 'Đ',
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct PremappedTarget {
+        pub keycode: u8,
+        pub needs_shift: bool,
+    }
+
+    pub const VIETNAMESE_CHAR_PAIRS: &[(char, char)] = &[
+        ('à', 'À'),
+        ('á', 'Á'),
+        ('ả', 'Ả'),
+        ('ã', 'Ã'),
+        ('ạ', 'Ạ'),
+        ('ă', 'Ă'),
+        ('ằ', 'Ằ'),
+        ('ắ', 'Ắ'),
+        ('ẳ', 'Ẳ'),
+        ('ẵ', 'Ẵ'),
+        ('ặ', 'Ặ'),
+        ('â', 'Â'),
+        ('ầ', 'Ầ'),
+        ('ấ', 'Ấ'),
+        ('ẩ', 'Ẩ'),
+        ('ẫ', 'Ẫ'),
+        ('ậ', 'Ậ'),
+        ('đ', 'Đ'),
+        ('è', 'È'),
+        ('é', 'É'),
+        ('ẻ', 'Ẻ'),
+        ('ẽ', 'Ẽ'),
+        ('ẹ', 'Ẹ'),
+        ('ê', 'Ê'),
+        ('ề', 'Ề'),
+        ('ế', 'Ế'),
+        ('ể', 'Ể'),
+        ('ễ', 'Ễ'),
+        ('ệ', 'Ệ'),
+        ('ì', 'Ì'),
+        ('í', 'Í'),
+        ('ỉ', 'Ỉ'),
+        ('ĩ', 'Ĩ'),
+        ('ị', 'Ị'),
+        ('ò', 'Ò'),
+        ('ó', 'Ó'),
+        ('ỏ', 'Ỏ'),
+        ('õ', 'Õ'),
+        ('ọ', 'Ọ'),
+        ('ô', 'Ô'),
+        ('ồ', 'Ồ'),
+        ('ố', 'Ố'),
+        ('ổ', 'Ổ'),
+        ('ỗ', 'Ỗ'),
+        ('ộ', 'Ộ'),
+        ('ơ', 'Ơ'),
+        ('ớ', 'Ớ'),
+        ('ờ', 'Ờ'),
+        ('ở', 'Ở'),
+        ('ỡ', 'Ỡ'),
+        ('ợ', 'Ợ'),
+        ('ù', 'Ù'),
+        ('ú', 'Ú'),
+        ('ủ', 'Ủ'),
+        ('ũ', 'Ũ'),
+        ('ụ', 'Ụ'),
+        ('ư', 'Ư'),
+        ('ừ', 'Ừ'),
+        ('ứ', 'Ứ'),
+        ('ử', 'Ử'),
+        ('ữ', 'Ữ'),
+        ('ự', 'Ự'),
+        ('ỳ', 'Ỳ'),
+        ('ý', 'Ý'),
+        ('ỷ', 'Ỷ'),
+        ('ỹ', 'Ỹ'),
+        ('ỵ', 'Ỵ'),
+    ];
+
+    pub const POPULAR_UPPERCASE: &[char] = &[
+        'Đ', 'À', 'Á', 'Ả', 'Ã', 'Ạ', 'Â', 'Ầ', 'Ấ', 'Ẩ', 'Ẫ', 'Ậ', 'È', 'É', 'Ẻ', 'Ẽ', 'Ẹ', 'Ê',
+        'Ề', 'Ế', 'Ể', 'Ễ', 'Ệ', 'Ì', 'Í', 'Ỉ', 'Ĩ', 'Ị', 'Ò', 'Ó', 'Ỏ', 'Õ', 'Ọ', 'Ô', 'Ồ', 'Ố',
+        'Ổ', 'Ỗ', 'Ộ', 'Ơ', 'Ờ', 'Ớ', 'Ở', 'Ỡ', 'Ợ', 'Ù', 'Ú', 'Ủ', 'Ũ', 'Ụ', 'Ư', 'Ừ', 'Ứ', 'Ử',
+        'Ữ', 'Ự', 'Ỳ', 'Ý', 'Ă', 'Ắ', 'Ằ', 'Ỷ', 'Ỹ', 'Ỵ', 'Ẳ', 'Ẵ', 'Ặ',
     ];
 
     #[derive(Debug)]
@@ -156,7 +226,7 @@ mod platform {
     #[derive(Debug)]
     pub struct VietnamesePremappedTable {
         pub chunks: Vec<PremappedChunk>,
-        pub char_to_keycode: std::collections::HashMap<char, u8>,
+        pub char_to_target: std::collections::HashMap<char, PremappedTarget>,
         pub is_premapped: [bool; 256],
     }
 
@@ -919,7 +989,7 @@ mod platform {
 
             let _target = self.require_focused_window()?;
 
-            // 1. If we have Backspaces, send them first and flush so the application deletes cleanly
+            // 1. If we have Backspaces, send them first and sync so the application deletes cleanly
             if delete_graphemes > 0 {
                 let backspace = find_direct_keycode_in(&self.keymap, key::BackSpace)
                     .map_or(SyntheticKey::Mapped(key::BackSpace), SyntheticKey::Direct);
@@ -927,15 +997,18 @@ mod platform {
                     self.queue_synthetic_key(backspace)?;
                 }
                 self.connection
-                    .flush()
+                    .sync()
                     .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))?;
             }
 
             // 2. Send replacement characters
             for character in text.chars() {
                 let key = if let Some(ref table) = self.premapped_table {
-                    if let Some(&keycode) = table.char_to_keycode.get(&character) {
-                        SyntheticKey::Premapped(keycode)
+                    if let Some(&target) = table.char_to_target.get(&character) {
+                        SyntheticKey::Premapped {
+                            keycode: target.keycode,
+                            needs_shift: target.needs_shift,
+                        }
                     } else {
                         let keysym = Keysym::from_char(character).raw();
                         find_direct_keycode_in(&self.keymap, keysym)
@@ -964,20 +1037,61 @@ mod platform {
         }
 
         fn queue_synthetic_key(&mut self, key: SyntheticKey) -> Result<()> {
-            let (keycode, is_mapped) = match key {
-                SyntheticKey::Direct(keycode) => (keycode, false),
-                SyntheticKey::Premapped(keycode) => (keycode, false),
+            let is_mapped = match key {
+                SyntheticKey::Direct(keycode) => {
+                    queue_fake_key_on(&self.connection, keycode)?;
+                    self.synthetic_key_presses_to_ignore.push_back(keycode);
+                    self.synthetic_key_releases_to_ignore.push_back(keycode);
+                    false
+                }
+                SyntheticKey::Premapped {
+                    keycode,
+                    needs_shift,
+                } => {
+                    if needs_shift {
+                        let shift_kc =
+                            find_direct_keycode_in(&self.keymap, key::Shift_L).unwrap_or(50);
+                        self.queue_synthetic_press(shift_kc)?;
+                        queue_fake_key_on(&self.connection, keycode)?;
+                        self.synthetic_key_presses_to_ignore.push_back(keycode);
+                        self.synthetic_key_releases_to_ignore.push_back(keycode);
+                        self.queue_synthetic_release(shift_kc)?;
+                    } else {
+                        queue_fake_key_on(&self.connection, keycode)?;
+                        self.synthetic_key_presses_to_ignore.push_back(keycode);
+                        self.synthetic_key_releases_to_ignore.push_back(keycode);
+                    }
+                    false
+                }
                 SyntheticKey::Mapped(keysym) => {
                     self.set_injection_keysym(keysym)?;
-                    (self.injection_keycode, true)
+                    let keycode = self.injection_keycode;
+                    queue_fake_key_on(&self.connection, keycode)?;
+                    self.synthetic_key_presses_to_ignore.push_back(keycode);
+                    self.synthetic_key_releases_to_ignore.push_back(keycode);
+                    true
                 }
             };
-            queue_fake_key_on(&self.connection, keycode)?;
-            self.synthetic_key_presses_to_ignore.push_back(keycode);
-            self.synthetic_key_releases_to_ignore.push_back(keycode);
             if is_mapped {
                 self.last_mapped_event_time = Some(Instant::now());
             }
+            Ok(())
+        }
+
+        fn queue_synthetic_press(&mut self, keycode: u8) -> Result<()> {
+            let _cookie = self
+                .connection
+                .xtest_fake_input(
+                    xproto::KEY_PRESS_EVENT,
+                    keycode,
+                    CURRENT_TIME,
+                    NONE,
+                    0,
+                    0,
+                    0,
+                )
+                .map_err(|error| KeyboardError::X11Protocol(error.to_string()))?;
+            self.synthetic_key_presses_to_ignore.push_back(keycode);
             Ok(())
         }
 
@@ -1383,6 +1497,44 @@ mod platform {
         }
     }
 
+    fn is_vital_key(kc: u8) -> bool {
+        matches!(
+            kc,
+            9..=22 // Esc, 1..=, Backspace
+            | 23 // Tab
+            | 24..=36 // q..], Enter
+            | 37 // Control_L
+            | 38..=48 // a..'
+            | 49 // `~
+            | 50 // Shift_L
+            | 51 // \|
+            | 52..=61 // z../
+            | 62 // Shift_R
+            | 63 // KP_Multiply
+            | 64 // Alt_L
+            | 65 // Space
+            | 66 // Caps_Lock
+            | 67..=76 // F1..F10
+            | 77 // Num_Lock
+            | 78 // Scroll_Lock
+            | 79..=91 // Numpad
+            | 95..=96 // F11, F12
+            | 104..=108 // KP_Enter, Control_R, KP_Divide, Print, Alt_R
+            | 110..=119 // Home, Up, Prior, Left, Right, End, Down, Next, Insert, Delete
+            | 121..=124 // XF86AudioMute, LowerVolume, RaiseVolume, PowerOff
+            | 127 // Pause
+            | 133..=135 // Super_L, Super_R, Menu
+            | 203..=207 // Modifiers: Mode_switch, Alt_L, Meta_L, Super_L, Hyper_L
+            | 218 // Print
+            | 232..=233 // MonBrightnessDown, MonBrightnessUp
+        )
+    }
+
+    struct KeycodeMappingPlan {
+        keycode: u8,
+        keysyms: Vec<u32>,
+    }
+
     fn setup_premapped_table(
         connection: &XCBConnection,
         reserved_injection_keycode: u8,
@@ -1390,7 +1542,6 @@ mod platform {
         let setup = connection.setup();
         let min = setup.min_keycode;
         let max = setup.max_keycode;
-        let char_count = VIETNAMESE_UNICODE_CHARS.len();
 
         let count = max
             .checked_sub(min)
@@ -1419,22 +1570,68 @@ mod platform {
             }
         };
 
-        let is_excluded = |kc: u8| -> bool {
-            kc == reserved_injection_keycode
-                || kc == 121 // AudioMute
-                || (133..=135).contains(&kc) // Super_L, Super_R, Menu
-                || (203..=207).contains(&kc) // Mode_switch, Alt_L, Meta_L, Super_L, Hyper_L
-        };
+        let mut candidate_keycodes: Vec<u8> = Vec::with_capacity(140);
 
-        let mut candidate_keycodes: Vec<u8> = Vec::with_capacity(char_count);
-
-        // Completely empty keycodes only (excluding reserved injection keycode and min keycode 8)
+        // 1. Completely empty keycodes (all keysyms == 0)
         for kc in min..=max {
-            if !is_excluded(kc) && kc != 8 && is_empty_kc(kc) && !candidate_keycodes.contains(&kc) {
+            if !is_vital_key(kc)
+                && kc != reserved_injection_keycode
+                && kc != 8
+                && is_empty_kc(kc)
+                && !candidate_keycodes.contains(&kc)
+            {
                 candidate_keycodes.push(kc);
-                if candidate_keycodes.len() == char_count {
-                    break;
+            }
+        }
+
+        // 2. Unused Asian / Japanese keys (not on US/standard keyboards)
+        for kc in [98, 99, 100, 101, 102, 130, 131] {
+            if kc >= min
+                && kc <= max
+                && !is_vital_key(kc)
+                && kc != reserved_injection_keycode
+                && !candidate_keycodes.contains(&kc)
+            {
+                candidate_keycodes.push(kc);
+            }
+        }
+
+        // 3. Spare / Unused non-vital keys
+        for kc in [93, 97, 103, 109, 120, 125, 126, 128, 129, 132] {
+            if kc >= min
+                && kc <= max
+                && !is_vital_key(kc)
+                && kc != reserved_injection_keycode
+                && !candidate_keycodes.contains(&kc)
+            {
+                candidate_keycodes.push(kc);
+            }
+        }
+
+        // 4. Safe high keycodes (XF86 media / launch / extra keys)
+        let safe_ranges = [136..=202, 208..=217, 219..=231, 234..=247, 249..=255];
+        for range in safe_ranges {
+            for kc in range {
+                if kc >= min
+                    && kc <= max
+                    && !is_vital_key(kc)
+                    && kc != reserved_injection_keycode
+                    && !candidate_keycodes.contains(&kc)
+                {
+                    candidate_keycodes.push(kc);
                 }
+            }
+        }
+
+        // 5. Safe ISO / low keycode if still needed
+        for kc in [94, 8] {
+            if kc >= min
+                && kc <= max
+                && !is_vital_key(kc)
+                && kc != reserved_injection_keycode
+                && !candidate_keycodes.contains(&kc)
+            {
+                candidate_keycodes.push(kc);
             }
         }
 
@@ -1443,28 +1640,88 @@ mod platform {
             return Ok(None);
         }
 
-        let map_count = candidate_keycodes.len().min(char_count);
-        candidate_keycodes.truncate(map_count);
-        candidate_keycodes.sort_unstable();
+        let total_candidates = candidate_keycodes.len();
+        let pair_count = VIETNAMESE_CHAR_PAIRS.len();
+        let lower_count = pair_count.min(total_candidates);
 
-        // Group candidate keycodes into contiguous chunks for change_keyboard_mapping
-        let mut chunk_ranges: Vec<(u8, u8)> = Vec::new();
-        for &kc in &candidate_keycodes {
-            if let Some(last) = chunk_ranges.last_mut() {
-                if last.0 + last.1 == kc {
-                    last.1 += 1;
-                    continue;
+        let mut plans = Vec::with_capacity(total_candidates);
+        let mut char_to_target = std::collections::HashMap::with_capacity(pair_count * 2);
+        let mut is_premapped = [false; 256];
+
+        // Map pairs (lower in Level 0, upper in Level 1)
+        for idx in 0..lower_count {
+            let kc = candidate_keycodes[idx];
+            let (lower, upper) = VIETNAMESE_CHAR_PAIRS[idx];
+            let lower_sym = Keysym::from_char(lower).raw();
+            let upper_sym = Keysym::from_char(upper).raw();
+
+            let mut keysyms = Vec::with_capacity(width as usize);
+            for slot in 0..width {
+                if slot % 2 == 0 {
+                    keysyms.push(lower_sym);
+                } else {
+                    keysyms.push(upper_sym);
                 }
             }
-            chunk_ranges.push((kc, 1));
+            plans.push(KeycodeMappingPlan {
+                keycode: kc,
+                keysyms,
+            });
+            char_to_target.insert(
+                lower,
+                PremappedTarget {
+                    keycode: kc,
+                    needs_shift: false,
+                },
+            );
+            // By default, upper is reachable via Shift on this keycode
+            char_to_target.insert(
+                upper,
+                PremappedTarget {
+                    keycode: kc,
+                    needs_shift: true,
+                },
+            );
+            is_premapped[usize::from(kc)] = true;
         }
 
-        let mut chunks = Vec::with_capacity(chunk_ranges.len());
-        let mut char_to_keycode = std::collections::HashMap::with_capacity(map_count);
-        let mut is_premapped = [false; 256];
-        let mut char_idx = 0;
+        // Assign dedicated unshifted keycodes to uppercase characters where available
+        if total_candidates > lower_count {
+            let extra_count = total_candidates - lower_count;
+            for (offset, &upper_char) in POPULAR_UPPERCASE.iter().take(extra_count).enumerate() {
+                let kc = candidate_keycodes[lower_count + offset];
+                let upper_sym = Keysym::from_char(upper_char).raw();
+                let keysyms = vec![upper_sym; width as usize];
+                plans.push(KeycodeMappingPlan {
+                    keycode: kc,
+                    keysyms,
+                });
+                char_to_target.insert(
+                    upper_char,
+                    PremappedTarget {
+                        keycode: kc,
+                        needs_shift: false,
+                    },
+                );
+                is_premapped[usize::from(kc)] = true;
+            }
+        }
 
-        for (first_kc, cnt) in chunk_ranges {
+        // Sort plans by keycode so we can create contiguous chunks
+        plans.sort_by_key(|p| p.keycode);
+
+        // Group into contiguous chunks
+        let mut chunks = Vec::new();
+        let mut i = 0;
+        while i < plans.len() {
+            let first_kc = plans[i].keycode;
+            let mut cnt = 1_u8;
+            while i + (cnt as usize) < plans.len()
+                && plans[i + (cnt as usize)].keycode == first_kc + cnt
+            {
+                cnt += 1;
+            }
+
             let chunk_reply = match connection.get_keyboard_mapping(first_kc, cnt) {
                 Ok(cookie) => match cookie.reply() {
                     Ok(reply) => reply,
@@ -1482,16 +1739,7 @@ mod platform {
 
             let mut new_mapping = Vec::with_capacity((cnt as usize) * (width as usize));
             for offset in 0..cnt {
-                let kc = first_kc + offset;
-                let character = VIETNAMESE_UNICODE_CHARS[char_idx];
-                char_idx += 1;
-
-                let keysym = Keysym::from_char(character).raw();
-                for _ in 0..width {
-                    new_mapping.push(keysym);
-                }
-                char_to_keycode.insert(character, kc);
-                is_premapped[usize::from(kc)] = true;
+                new_mapping.extend_from_slice(&plans[i + (offset as usize)].keysyms);
             }
 
             match connection.change_keyboard_mapping(cnt, first_kc, width, &new_mapping) {
@@ -1510,21 +1758,23 @@ mod platform {
             chunks.push(PremappedChunk {
                 first_keycode: first_kc,
                 count: cnt,
-                keysyms_per_keycode: width,
+                keysyms_per_keycode: chunk_reply.keysyms_per_keycode,
                 original_mapping: orig_mapping,
             });
+
+            i += cnt as usize;
         }
 
         info!(
             chunk_count = chunks.len(),
-            mapped_count = map_count,
-            char_count,
+            mapped_keycodes = plans.len(),
+            mapped_chars = char_to_target.len(),
             "Pre-mapped Vietnamese Unicode characters to safe X11 keycodes"
         );
 
         Ok(Some(VietnamesePremappedTable {
             chunks,
-            char_to_keycode,
+            char_to_target,
             is_premapped,
         }))
     }
@@ -1759,7 +2009,7 @@ mod platform {
     #[derive(Clone, Copy)]
     enum SyntheticKey {
         Direct(u8),
-        Premapped(u8),
+        Premapped { keycode: u8, needs_shift: bool },
         Mapped(u32),
     }
 
@@ -2009,6 +2259,56 @@ mod platform {
                 true,
                 b"Mouse",
             ));
+        }
+
+        #[test]
+        fn vietnamese_char_tables_are_consistent_and_complete() {
+            assert_eq!(VIETNAMESE_CHAR_PAIRS.len(), 67);
+            assert_eq!(POPULAR_UPPERCASE.len(), 67);
+
+            let mut lower_set = std::collections::HashSet::new();
+            let mut upper_set = std::collections::HashSet::new();
+            for &(lower, upper) in VIETNAMESE_CHAR_PAIRS {
+                assert!(lower_set.insert(lower), "duplicate lowercase char: {lower}");
+                assert!(upper_set.insert(upper), "duplicate uppercase char: {upper}");
+                assert!(Keysym::from_char(lower).raw() != 0);
+                assert!(Keysym::from_char(upper).raw() != 0);
+            }
+
+            for &upper in POPULAR_UPPERCASE {
+                assert!(
+                    upper_set.contains(&upper),
+                    "missing uppercase char: {upper}"
+                );
+            }
+        }
+
+        #[test]
+        fn vital_keys_are_protected_from_borrowing() {
+            // Standard typing keys must be vital
+            assert!(is_vital_key(9)); // Esc
+            assert!(is_vital_key(22)); // BackSpace
+            assert!(is_vital_key(36)); // Return
+            assert!(is_vital_key(38)); // a
+            assert!(is_vital_key(50)); // Shift_L
+            assert!(is_vital_key(64)); // Alt_L
+            assert!(is_vital_key(65)); // Space
+            assert!(is_vital_key(111)); // Up
+            assert!(is_vital_key(116)); // Down
+            assert!(is_vital_key(121)); // AudioMute
+            assert!(is_vital_key(133)); // Super_L
+            assert!(is_vital_key(204)); // Alt_L
+            assert!(is_vital_key(232)); // MonBrightnessDown
+
+            // Safe keys must NOT be vital
+            assert!(!is_vital_key(93));
+            assert!(!is_vital_key(98)); // Katakana
+            assert!(!is_vital_key(136)); // Cancel
+            assert!(!is_vital_key(150)); // Sleep
+            assert!(!is_vital_key(180)); // HomePage
+            assert!(!is_vital_key(210)); // Launch3
+            assert!(!is_vital_key(240)); // Reply
+            assert!(!is_vital_key(250)); // Prev_VMode
         }
     }
 }
