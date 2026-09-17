@@ -1,4 +1,6 @@
+
 sudo apt update && sudo apt install fonts-noto-core fonts-inter -y
+sudo apt install ttf-mscorefonts-installer
 gsettings set org.cinnamon.desktop.interface font-name 'Inter 10'
 gsettings set org.cinnamon.desktop.wm.preferences titlebar-font 'Inter Bold 10'
 gsettings set org.cinnamon.desktop.interface document-font-name 'Inter 10'
