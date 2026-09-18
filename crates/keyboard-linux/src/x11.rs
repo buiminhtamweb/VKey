@@ -999,6 +999,7 @@ mod platform {
                 self.connection
                     .sync()
                     .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))?;
+                std::thread::sleep(Duration::from_millis(2));
             }
 
             // 2. Send replacement characters

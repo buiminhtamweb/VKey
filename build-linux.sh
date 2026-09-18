@@ -197,10 +197,19 @@ EOF
         cp "vkey_icon_1786215513207.png" "${deb_pkg_dir}/usr/share/pixmaps/vkey.png"
     fi
 
+    # Copy fonts and setup script
+    mkdir -p "${deb_pkg_dir}/usr/share/vkey/font"
+    if [ -d font ]; then
+        cp -r font/* "${deb_pkg_dir}/usr/share/vkey/font/"
+    fi
+
     # Set correct permissions
     find "${deb_pkg_dir}" -type d -exec chmod 755 {} +
     find "${deb_pkg_dir}" -type f -exec chmod 644 {} +
     chmod 755 "${deb_pkg_dir}/usr/bin/VKey-rs"
+    if [ -f "${deb_pkg_dir}/usr/share/vkey/font/setup-font.sh" ]; then
+        chmod 755 "${deb_pkg_dir}/usr/share/vkey/font/setup-font.sh"
+    fi
 
     # Ensure target/dist exists in workspace
     mkdir -p "${dist_dir}"
@@ -317,8 +326,8 @@ package_release() {
     pkg_name="VKey-rs-${version}-linux"
     pkg_dir="${dist_dir}/${pkg_name}"
 
-    info "Creating Linux package directory: ${pkg_dir}"
-    rm -rf "$dist_dir"
+    mkdir -p "$dist_dir"
+    rm -rf "${pkg_dir}" "${dist_dir}/${pkg_name}.tar.gz" 2>/dev/null || true
     mkdir -p "${pkg_dir}/bin" "${pkg_dir}/config"
 
     for bin_name in VKey-rs keyboard-debug keyboard-core-debug VKey-core-test; do

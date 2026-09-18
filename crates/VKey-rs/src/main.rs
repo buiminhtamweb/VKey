@@ -105,7 +105,7 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
         // Run egui settings panel in the main thread
         let mut viewport = egui::ViewportBuilder::default()
             .with_title("VKey Settings")
-            .with_inner_size([350.0, 440.0])
+            .with_inner_size([350.0, 480.0])
             .with_resizable(false)
             .with_maximize_button(false);
         if let Some(icon) = load_window_icon() {

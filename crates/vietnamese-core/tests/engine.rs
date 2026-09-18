@@ -398,3 +398,14 @@ fn test_spelling_auto_restore_english_words() {
     assert_eq!(type_text("clear"), "clear");
     assert_eq!(type_text("smart"), "smart");
 }
+
+#[test]
+fn test_spelling_allows_vietnamese_tone_before_consonant() {
+    assert_eq!(type_text("hieern"), "hiển");
+    assert_eq!(type_text("bieern"), "biển");
+    assert_eq!(type_text("ddieerm"), "điểm");
+    assert_eq!(type_text("barn"), "bản");
+    assert_eq!(type_text("carm"), "cảm");
+    assert_eq!(type_text("chuaarn"), "chuẩn");
+    assert_eq!(type_text("khoarn"), "khoản");
+}

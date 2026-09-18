@@ -132,8 +132,8 @@ pub fn has_vietnamese_diacritic(text: &str) -> bool {
 pub fn has_foreign_consonant_cluster(raw: &str) -> bool {
     let lower = raw.to_lowercase();
     const FOREIGN_FINAL_CLUSTERS: &[&str] = &[
-        "st", "sk", "sp", "rt", "lt", "rm", "rn", "mp", "nd", "nt", "ct", "ft", "ld", "lk", "lp",
-        "pt", "xt", "rk", "ck", "sh",
+        "st", "sk", "sp", "rt", "lt", "mp", "nd", "nt", "ct", "ft", "ld", "lk", "lp", "pt", "xt",
+        "rk", "ck", "sh",
     ];
     for cluster in FOREIGN_FINAL_CLUSTERS {
         if lower.ends_with(cluster) {
@@ -165,11 +165,24 @@ pub fn is_valid_vietnamese_syllable_ignoring_trailing_modifier(word: &str) -> bo
 /// 1. `rendered` actually contains Vietnamese diacritics (tones or vowel shapes).
 ///    If `rendered` has no diacritics (e.g. cancelled with shape/tone toggle like "dd", "tama", "sangs", "uuw"),
 ///    it is not an accidental transformation and should not be restored to `raw`.
-/// 2. AND either:
+/// 2. If `raw` contains explicit Vietnamese shape triggers (ee, aa, aw, oo, ow, uw, dd)
+///    AND `rendered` is a valid Vietnamese syllable, it is never restored to raw.
+/// 3. AND either:
 ///    - `raw` ends with foreign consonant clusters (e.g. "test" -> "tét", "post" -> "pót", "cost" -> "cót"), OR
 ///    - `rendered` violates Vietnamese syllable phonotactics (e.g. "filtẻ", "fỏmat", "cleả", "smảt").
 pub fn should_restore_raw(rendered: &str, raw: &str) -> bool {
     if !has_vietnamese_diacritic(rendered) {
+        return false;
+    }
+    let lower_raw = raw.to_lowercase();
+    let has_shape_key = lower_raw.contains("ee")
+        || lower_raw.contains("aa")
+        || lower_raw.contains("aw")
+        || lower_raw.contains("oo")
+        || lower_raw.contains("ow")
+        || lower_raw.contains("uw")
+        || lower_raw.contains("dd");
+    if has_shape_key && is_valid_vietnamese_syllable_ignoring_trailing_modifier(rendered) {
         return false;
     }
     if has_foreign_consonant_cluster(raw) {

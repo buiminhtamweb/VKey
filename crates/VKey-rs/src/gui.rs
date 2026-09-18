@@ -744,6 +744,26 @@ impl eframe::App for AppGui {
                         if config_changed {
                             self.update_config(self.config.clone(), ctx);
                         }
+
+                        ui.add_space(4.0);
+                        let font_btn = egui::Button::new(
+                            egui::RichText::new("Cài đặt Font tiếng Việt (VNI & Unicode)")
+                                .size(12.0)
+                                .color(egui::Color32::from_rgb(13, 110, 253)),
+                        )
+                        .rounding(4.0)
+                        .fill(egui::Color32::from_rgb(235, 243, 254));
+
+                        if ui
+                            .add(font_btn)
+                            .on_hover_text(
+                                "Mở cửa sổ Terminal và tự động chạy script cài đặt font VNI (từ file vni.zip)\n\
+                                 cùng các font Unicode tiếng Việt chuẩn (Inter, Noto Sans/Serif, MS Core Fonts)."
+                            )
+                            .clicked()
+                        {
+                            launch_font_setup_terminal();
+                        }
                     });
                 });
 
@@ -944,4 +964,89 @@ pub fn setup_custom_fonts(ctx: &egui::Context) {
     }
 
     ctx.set_fonts(fonts);
+}
+
+/// Resolves the filesystem path to `font/setup-font.sh`.
+fn find_setup_font_script() -> Option<std::path::PathBuf> {
+    // 1. Direct workspace location
+    let workspace_path =
+        std::path::PathBuf::from("/mnt/DATA/Software Projects/VKey/font/setup-font.sh");
+    if workspace_path.exists() {
+        return Some(workspace_path);
+    }
+
+    // 2. Relative to current binary
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(parent) = exe_path.parent() {
+            let direct = parent.join("font/setup-font.sh");
+            if direct.exists() {
+                return Some(direct);
+            }
+            if let Some(grandparent) = parent.parent() {
+                let repo = grandparent.join("font/setup-font.sh");
+                if repo.exists() {
+                    return Some(repo);
+                }
+            }
+        }
+    }
+
+    // 3. System installed locations
+    for system_path in [
+        "/usr/local/share/vkey/font/setup-font.sh",
+        "/usr/share/vkey/font/setup-font.sh",
+        "/opt/vkey/font/setup-font.sh",
+    ] {
+        let pb = std::path::PathBuf::from(system_path);
+        if pb.exists() {
+            return Some(pb);
+        }
+    }
+
+    None
+}
+
+/// Spawns a terminal emulator window that automatically executes `setup-font.sh`.
+fn launch_font_setup_terminal() {
+    let Some(script_path) = find_setup_font_script() else {
+        tracing::error!("Could not locate setup-font.sh");
+        return;
+    };
+
+    let script_str = script_path.to_string_lossy().to_string();
+
+    // Candidates of common Linux terminal emulators in priority order
+    let terminals = [
+        (
+            "x-terminal-emulator",
+            vec!["-e", "bash", script_str.as_str()],
+        ),
+        ("gnome-terminal", vec!["--", "bash", script_str.as_str()]),
+        ("xfce4-terminal", vec!["-e", script_str.as_str()]),
+        ("mate-terminal", vec!["-e", script_str.as_str()]),
+        ("konsole", vec!["-e", "bash", script_str.as_str()]),
+        ("alacritty", vec!["-e", "bash", script_str.as_str()]),
+        ("kitty", vec!["bash", script_str.as_str()]),
+        ("tilix", vec!["-e", script_str.as_str()]),
+        ("xterm", vec!["-e", "bash", script_str.as_str()]),
+    ];
+
+    for (term, args) in &terminals {
+        match std::process::Command::new(term).args(args).spawn() {
+            Ok(_) => {
+                tracing::info!("Launched font setup with terminal: {}", term);
+                return;
+            }
+            Err(e) => {
+                tracing::debug!("Could not spawn terminal {}: {}", term, e);
+            }
+        }
+    }
+
+    // Fallback: try pkexec or bash directly
+    tracing::warn!("No supported terminal emulator found, attempting pkexec fallback");
+    let _ = std::process::Command::new("pkexec")
+        .arg("bash")
+        .arg(&script_str)
+        .spawn();
 }
