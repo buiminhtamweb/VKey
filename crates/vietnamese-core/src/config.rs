@@ -28,6 +28,7 @@ pub struct EngineConfig {
     pub restore_key: char,
     pub startup_with_system: bool,
     pub shortcut_key: ShortcutKey,
+    pub fix_browser_autocomplete: bool,
 }
 
 impl Default for EngineConfig {
@@ -41,6 +42,7 @@ impl Default for EngineConfig {
             restore_key: 'z',
             startup_with_system: false,
             shortcut_key: ShortcutKey::CtrlShift,
+            fix_browser_autocomplete: true,
         }
     }
 }

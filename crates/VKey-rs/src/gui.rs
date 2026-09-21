@@ -741,6 +741,20 @@ impl eframe::App for AppGui {
                             config_changed = true;
                         }
 
+                        let mut fix_browser_autocomplete = self.config.fix_browser_autocomplete;
+                        let fba_chk = ui.checkbox(
+                            &mut fix_browser_autocomplete,
+                            egui::RichText::new("Sửa lỗi gợi ý trình duyệt (Chrome, Edge...)")
+                                .color(egui::Color32::BLACK),
+                        ).on_hover_text(
+                            "Tự động xóa gợi ý tự điền (inline autocomplete) trong thanh địa chỉ trình duyệt\n\
+                             (Chrome, Edge, Brave, Vivaldi...) để tránh lỗi lặp phím khi gõ tiếng Việt (ví dụ: dd -> dđ)."
+                        );
+                        if fba_chk.changed() {
+                            self.config.fix_browser_autocomplete = fix_browser_autocomplete;
+                            config_changed = true;
+                        }
+
                         if config_changed {
                             self.update_config(self.config.clone(), ctx);
                         }

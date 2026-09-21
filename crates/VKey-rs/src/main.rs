@@ -175,6 +175,7 @@ fn run_daemon(
     let mut config = initial_config;
     let mut engine = InputEngine::new(config.clone());
     let mut backend = X11KeyboardBackend::new()?;
+    backend.set_fix_browser_autocomplete(config.fix_browser_autocomplete);
     let mut shortcut_state = ShortcutState::default();
     backend.start()?;
 
@@ -183,6 +184,7 @@ fn run_daemon(
             let _ = backend.stop();
             return Ok(());
         }
+        backend.set_fix_browser_autocomplete(config.fix_browser_autocomplete);
 
         let event = match backend.next_event() {
             Ok(ev) => ev,
@@ -202,6 +204,7 @@ fn run_daemon(
             let _ = backend.stop();
             return Ok(());
         }
+        backend.set_fix_browser_autocomplete(config.fix_browser_autocomplete);
 
         let toggle_triggered = shortcut_state.update(config.shortcut_key, event);
 

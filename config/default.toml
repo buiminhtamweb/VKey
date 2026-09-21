@@ -5,3 +5,5 @@ restore_typing = true
 restore_key = "z"
 auto_start = true
 backend = "auto"
+fix_browser_autocomplete = true
+

@@ -259,6 +259,8 @@ mod platform {
         raw_modifiers: RawModifierState,
         pressed_shift_keys: Vec<(u16, u8)>,
         last_base_shift: Option<bool>,
+        pub fix_browser_autocomplete: bool,
+        cached_browser_window: Option<(u32, bool)>,
     }
 
     impl std::fmt::Debug for X11KeyboardBackend {
@@ -437,6 +439,8 @@ mod platform {
                 raw_modifiers: RawModifierState::default(),
                 pressed_shift_keys: Vec::new(),
                 last_base_shift: None,
+                fix_browser_autocomplete: true,
+                cached_browser_window: None,
             })
         }
 
@@ -982,12 +986,46 @@ mod platform {
             self.replace_text(count, "")
         }
 
+        pub fn set_fix_browser_autocomplete(&mut self, enabled: bool) {
+            self.fix_browser_autocomplete = enabled;
+        }
+
+        pub fn is_browser_window(&mut self, window: u32) -> bool {
+            if let Some((cached_win, is_browser)) = self.cached_browser_window {
+                if cached_win == window {
+                    return is_browser;
+                }
+            }
+            let is_browser = is_browser_window_internal(&self.connection, window);
+            self.cached_browser_window = Some((window, is_browser));
+            is_browser
+        }
+
         pub(crate) fn replace_text(&mut self, delete_graphemes: usize, text: &str) -> Result<()> {
             if delete_graphemes == 0 && text.is_empty() {
                 return Ok(());
             }
 
-            let _target = self.require_focused_window()?;
+            let target = self.require_focused_window()?;
+
+            // Chrome/Chromium Omnibox inline autocomplete fix:
+            // When typing in browser URL/search bars, typing a character triggers inline autocompletion
+            // which highlights/selects the suggestion after the cursor.
+            // If we send Backspace directly, the browser only cancels the selection instead of
+            // deleting the character before cursor (causing e.g. "dd" -> "dđ").
+            // Sending Delete first cancels/clears the forward autocomplete selection cleanly.
+            if self.fix_browser_autocomplete
+                && delete_graphemes > 0
+                && self.is_browser_window(target.0)
+            {
+                let delete_key = find_direct_keycode_in(&self.keymap, key::Delete)
+                    .map_or(SyntheticKey::Mapped(key::Delete), SyntheticKey::Direct);
+                self.queue_synthetic_key(delete_key)?;
+                self.connection
+                    .sync()
+                    .map_err(|error| KeyboardError::ConnectionLost(error.to_string()))?;
+                std::thread::sleep(Duration::from_millis(2));
+            }
 
             // 1. If we have Backspaces, send them first and sync so the application deletes cleanly
             if delete_graphemes > 0 {
@@ -2081,6 +2119,54 @@ mod platform {
             .reply()
             .map_err(|error| KeyboardError::X11Protocol(error.to_string()))?;
         Ok(Some(WindowId(reply.focus)))
+    }
+
+    fn is_browser_window_internal(connection: &XCBConnection, mut window: u32) -> bool {
+        for _ in 0..5 {
+            if window == 0 {
+                break;
+            }
+            if let Ok(cookie) = connection.get_property(
+                false,
+                window,
+                xproto::AtomEnum::WM_CLASS,
+                xproto::AtomEnum::STRING,
+                0,
+                1024,
+            ) {
+                if let Ok(prop) = cookie.reply() {
+                    if !prop.value.is_empty() {
+                        let text = String::from_utf8_lossy(&prop.value).to_ascii_lowercase();
+                        let is_browser = text.contains("chrome")
+                            || text.contains("chromium")
+                            || text.contains("brave")
+                            || text.contains("edge")
+                            || text.contains("opera")
+                            || text.contains("vivaldi")
+                            || text.contains("firefox")
+                            || text.contains("coccoc")
+                            || text.contains("coc_coc")
+                            || text.contains("coc-coc")
+                            || text.contains("epiphany")
+                            || text.contains("zen");
+                        return is_browser;
+                    }
+                }
+            }
+            if let Ok(cookie) = connection.query_tree(window) {
+                if let Ok(tree) = cookie.reply() {
+                    if tree.parent == tree.root || tree.parent == 0 {
+                        break;
+                    }
+                    window = tree.parent;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        false
     }
 
     fn ensure_display_is_set() -> Result<()> {
