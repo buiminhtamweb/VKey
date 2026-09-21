@@ -84,3 +84,67 @@ fn test_replace_complex_words() {
         .insert_text(" — Cánh đồng bất tận, rược đuổi")
         .expect("insert sentence");
 }
+
+#[test]
+#[ignore = "requires X11 and running Google Chrome"]
+fn test_detect_browser() {
+    let mut backend = match X11KeyboardBackend::new() {
+        Ok(b) => b,
+        Err(_) => return, // no X11 display
+    };
+    let is_browser = backend.is_browser_window(81788950);
+    println!("Window 81788950 is_browser: {}", is_browser);
+    assert!(is_browser);
+}
+
+#[test]
+#[ignore = "requires X11 and running Google Chrome"]
+fn test_chrome_omnibox_replace() {
+    let mut backend = match X11KeyboardBackend::new() {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+
+    for (first_char, target_char) in [("d", "đ"), ("o", "ô"), ("o", "ơ"), ("e", "ẹ")] {
+        // Activate Chrome and focus Omnibox
+        let _ = std::process::Command::new("xdotool")
+            .args(["windowactivate", "--sync", "81788950", "key", "ctrl+l"])
+            .output();
+        std::thread::sleep(std::time::Duration::from_millis(150));
+
+        // Clear Omnibox
+        let _ = std::process::Command::new("xdotool")
+            .args(["key", "BackSpace"])
+            .output();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        let mut injector = backend.text_injector();
+        // Type first char
+        injector.insert_text(first_char).expect("insert first char");
+        // Wait for Chrome to trigger inline autocomplete
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        // Now replace first char with target char
+        injector.replace_text(1, target_char).expect("replace char");
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        // Copy omnibox content
+        let _ = std::process::Command::new("xdotool")
+            .args(["key", "ctrl+a", "ctrl+c"])
+            .output();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        let output = std::process::Command::new("xclip")
+            .args(["-o", "-selection", "clipboard"])
+            .output()
+            .expect("xclip");
+        let content = String::from_utf8_lossy(&output.stdout);
+        println!(
+            "Case {} -> {}: got {:?}",
+            first_char,
+            target_char,
+            content.trim()
+        );
+        assert_eq!(content.trim(), target_char);
+    }
+}
