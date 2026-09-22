@@ -188,8 +188,27 @@ fn test_moiwf_live() {
         .unwrap_or_else(|| "81788955".to_string());
 
     for (word_keys, expected) in [
-        (vec![("m", 0, "m"), ("o", 0, "o"), ("i", 0, "i"), ("w", 2, "ơi"), ("f", 2, "ời")], "mời"),
-        (vec![("t", 0, "t"), ("h", 0, "h"), ("o", 0, "o"), ("i", 0, "i"), ("w", 2, "ơi"), ("f", 2, "ời")], "thời"),
+        (
+            vec![
+                ("m", 0, "m"),
+                ("o", 0, "o"),
+                ("i", 0, "i"),
+                ("w", 2, "ơi"),
+                ("f", 2, "ời"),
+            ],
+            "mời",
+        ),
+        (
+            vec![
+                ("t", 0, "t"),
+                ("h", 0, "h"),
+                ("o", 0, "o"),
+                ("i", 0, "i"),
+                ("w", 2, "ơi"),
+                ("f", 2, "ời"),
+            ],
+            "thời",
+        ),
         (vec![("k", 0, "k"), ("y", 0, "y"), ("f", 1, "ỳ")], "kỳ"),
     ] {
         // Activate Chrome and focus Omnibox
@@ -226,7 +245,11 @@ fn test_moiwf_live() {
             .output()
             .expect("xclip");
         let content = String::from_utf8_lossy(&output.stdout);
-        println!("Omnibox content for expected {:?}: {:?}", expected, content.trim());
+        println!(
+            "Omnibox content for expected {:?}: {:?}",
+            expected,
+            content.trim()
+        );
         assert_eq!(content.trim(), expected);
     }
 }
