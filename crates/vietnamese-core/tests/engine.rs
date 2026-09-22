@@ -409,3 +409,16 @@ fn test_spelling_allows_vietnamese_tone_before_consonant() {
     assert_eq!(type_text("chuaarn"), "chuẩn");
     assert_eq!(type_text("khoarn"), "khoản");
 }
+
+#[test]
+fn test_moiwf() {
+    let mut engine = InputEngine::new(EngineConfig::default());
+    let mut output = String::new();
+    for ch in "moiwf".chars() {
+        let action = engine.process_key(KeyEvent::character(ch));
+        println!("Key '{}' -> {:?}", ch, action);
+        apply_action(&mut output, action, Some(ch));
+        println!("Output now: {:?}", output);
+    }
+    assert_eq!(output, "mời");
+}

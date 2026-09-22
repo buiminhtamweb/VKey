@@ -1563,9 +1563,29 @@ mod platform {
             | 121..=124 // XF86AudioMute, LowerVolume, RaiseVolume, PowerOff
             | 127 // Pause
             | 133..=135 // Super_L, Super_R, Menu
+            | 136 // KEY_STOP (Browser Stop / Cancel)
+            | 139 // KEY_UNDO
+            | 141..=148 // KEY_COPY, KEY_OPEN, KEY_PASTE, KEY_FIND, KEY_CUT, KEY_HELP, KEY_MENU, KEY_CALC
+            | 150..=151 // KEY_SLEEP, KEY_WAKEUP
+            | 158 // KEY_WWW
+            | 160..=161 // KEY_COFFEE (Screenlock), KEY_ROTATE_DISPLAY
+            | 163..=164 // KEY_MAIL, KEY_BOOKMARKS
+            | 166..=167 // KEY_BACK (Browser Back), KEY_FORWARD (Browser Forward)
+            | 171..=174 // KEY_NEXTSONG, KEY_PLAYPAUSE, KEY_PREVIOUSSONG, KEY_STOPCD
+            | 180..=182 // KEY_HOMEPAGE, KEY_REFRESH, KEY_EXIT
+            | 184..=186 // KEY_EDIT, KEY_SCROLLUP, KEY_SCROLLDOWN
+            | 189..=190 // KEY_NEW, KEY_REDO
             | 203..=207 // Modifiers: Mode_switch, Alt_L, Meta_L, Super_L, Hyper_L
+            | 208..=209 // KEY_PLAYCD, KEY_PAUSECD
+            | 213..=216 // KEY_SUSPEND, KEY_CLOSE, KEY_PLAY, KEY_FASTFORWARD
             | 218 // Print
+            | 223 // KEY_EMAIL
+            | 225 // KEY_SEARCH
             | 232..=233 // MonBrightnessDown, MonBrightnessUp
+            | 235..=238 // KEY_SWITCHVIDEOMODE, KEY_KBDILLUMTOGGLE, KEY_KBDILLUMDOWN, KEY_KBDILLUMUP
+            | 242 // KEY_SAVE
+            | 251..=253 // KEY_BRIGHTNESS_CYCLE, KEY_BRIGHTNESS_AUTO, KEY_DISPLAY_OFF
+            | 255 // KEY_RFKILL
         )
     }
 
@@ -1611,7 +1631,7 @@ mod platform {
 
         let mut candidate_keycodes: Vec<u8> = Vec::with_capacity(140);
 
-        // 1. Completely empty keycodes (all keysyms == 0)
+        // 1. Completely empty keycodes (all keysyms == 0) that are not vital
         for kc in min..=max {
             if !is_vital_key(kc)
                 && kc != reserved_injection_keycode
@@ -1623,7 +1643,19 @@ mod platform {
             }
         }
 
-        // 2. Unused Asian / Japanese keys (not on US/standard keyboards)
+        // 2. High Function keys F13..F24 (standard, completely safe, no accelerator conflicts)
+        for kc in 191..=202 {
+            if kc >= min
+                && kc <= max
+                && !is_vital_key(kc)
+                && kc != reserved_injection_keycode
+                && !candidate_keycodes.contains(&kc)
+            {
+                candidate_keycodes.push(kc);
+            }
+        }
+
+        // 3. Unused Asian / Japanese keys (not on US/standard keyboards)
         for kc in [98, 99, 100, 101, 102, 130, 131] {
             if kc >= min
                 && kc <= max
@@ -1635,8 +1667,8 @@ mod platform {
             }
         }
 
-        // 3. Spare / Unused non-vital keys
-        for kc in [93, 97, 103, 109, 120, 125, 126, 128, 129, 132] {
+        // 4. Spare / Unused non-vital keys in low range
+        for kc in [92, 93, 94, 97, 103, 109, 120, 125, 126, 128, 129, 132] {
             if kc >= min
                 && kc <= max
                 && !is_vital_key(kc)
@@ -1647,27 +1679,23 @@ mod platform {
             }
         }
 
-        // 4. Safe high keycodes (XF86 media / launch / extra keys)
-        let safe_ranges = [136..=202, 208..=217, 219..=231, 234..=247, 249..=255];
-        for range in safe_ranges {
-            for kc in range {
-                if kc >= min
-                    && kc <= max
-                    && !is_vital_key(kc)
-                    && kc != reserved_injection_keycode
-                    && !candidate_keycodes.contains(&kc)
-                {
-                    candidate_keycodes.push(kc);
-                }
-            }
-        }
-
-        // 5. Safe ISO / low keycode if still needed
-        for kc in [94, 8] {
+        // 5. Safe program / extra keys
+        for kc in [152, 153, 154, 155, 156, 157, 187, 188, 210, 211] {
             if kc >= min
                 && kc <= max
                 && !is_vital_key(kc)
                 && kc != reserved_injection_keycode
+                && !candidate_keycodes.contains(&kc)
+            {
+                candidate_keycodes.push(kc);
+            }
+        }
+
+        // 6. Any remaining non-vital, non-accelerator high keycodes
+        for kc in min..=max {
+            if !is_vital_key(kc)
+                && kc != reserved_injection_keycode
+                && kc != 8
                 && !candidate_keycodes.contains(&kc)
             {
                 candidate_keycodes.push(kc);
@@ -2387,13 +2415,24 @@ mod platform {
             assert!(is_vital_key(204)); // Alt_L
             assert!(is_vital_key(232)); // MonBrightnessDown
 
-            // Safe keys must NOT be vital
+            // Browser navigation, clipboard, document, system & hardware controls MUST be vital
+            assert!(is_vital_key(136)); // Stop / Cancel
+            assert!(is_vital_key(141)); // Copy
+            assert!(is_vital_key(143)); // Paste
+            assert!(is_vital_key(150)); // Sleep
+            assert!(is_vital_key(166)); // Browser Back
+            assert!(is_vital_key(167)); // Browser Forward
+            assert!(is_vital_key(180)); // HomePage
+            assert!(is_vital_key(181)); // Browser Refresh
+            assert!(is_vital_key(214)); // Close
+            assert!(is_vital_key(242)); // Save
+
+            // Truly safe non-vital keys must NOT be vital
             assert!(!is_vital_key(93));
             assert!(!is_vital_key(98)); // Katakana
-            assert!(!is_vital_key(136)); // Cancel
-            assert!(!is_vital_key(150)); // Sleep
-            assert!(!is_vital_key(180)); // HomePage
-            assert!(!is_vital_key(210)); // Launch3
+            assert!(!is_vital_key(152)); // File
+            assert!(!is_vital_key(191)); // F13
+            assert!(!is_vital_key(210)); // Launch3 / Prog3
             assert!(!is_vital_key(240)); // Reply
             assert!(!is_vital_key(250)); // Prev_VMode
         }
